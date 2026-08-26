@@ -1,36 +1,40 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Viva
 
-## Getting Started
+Viva is a voice-based proof-of-understanding product for education. A Teacher creates an Assignment and private evaluation Standard; a Student responds in a live voice Session; Viva evaluates the transcript and returns formative feedback.
 
-First, run the development server:
+## Status
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+Viva is at the product-definition and application-scaffold stage. The repository currently contains the approved PRD, architecture decisions, and a Next.js foundation. The live examination flow is not implemented yet.
+
+## Core flow
+
+```text
+Assignment → Session → Transcript → Assessment
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- The live Examiner receives the Assignment prompt, but never the private Standard.
+- The Grader evaluates the Session transcript against the pinned Standard.
+- Assessments are formative only; they are not grades or high-stakes decisions.
+- Raw Session audio is never stored.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Documentation
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- [Product requirements](docs/prd.md)
+- [Product language](CONTEXT.md)
+- [Architecture decisions](docs/adr)
 
-## Learn More
+## Local development
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npm install
+npm run dev
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Useful checks:
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm run lint
+npm run build
+```
