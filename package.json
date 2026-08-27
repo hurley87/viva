@@ -7,6 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "lint:imports": "depcruise convex --config .dependency-cruiser.cjs --output-type err",
+    "test": "vitest",
+    "test:once": "vitest run",
+    "test:invariants": "vitest run && npm run lint:imports",
     "seed": "convex run seed:seed",
     "provision": "tsx --env-file=.env.local scripts/provision.ts",
     "provision:void": "tsx --env-file=.env.local scripts/void.ts"
@@ -24,14 +28,18 @@
   },
   "devDependencies": {
     "@convex-dev/eslint-plugin": "^4.0.0",
+    "@edge-runtime/vm": "^5.0.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "convex-test": "^0.0.56",
+    "dependency-cruiser": "^18.2.0",
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.12",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.11"
   }
 }

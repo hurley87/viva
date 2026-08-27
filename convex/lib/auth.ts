@@ -60,3 +60,13 @@ export async function requireTeacher(
   }
   return user;
 }
+
+export async function requireOperator(
+  ctx: QueryCtx | MutationCtx,
+): Promise<Doc<"users">> {
+  const user = await requireUser(ctx);
+  if (user.role !== "operator") {
+    throw new Error("Unauthorized: Operator access required");
+  }
+  return user;
+}
