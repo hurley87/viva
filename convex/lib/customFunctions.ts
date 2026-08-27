@@ -3,7 +3,12 @@ import {
   customQuery,
 } from "convex-helpers/server/customFunctions";
 import { mutation, query } from "../_generated/server";
-import { requireStudent, requireTeacher, requireUser } from "./auth";
+import {
+  requireOperator,
+  requireStudent,
+  requireTeacher,
+  requireUser,
+} from "./auth";
 
 export const authedQuery = customQuery(query, {
   args: {},
@@ -37,10 +42,26 @@ export const studentMutation = customMutation(mutation, {
   },
 });
 
+export const teacherQuery = customQuery(query, {
+  args: {},
+  input: async (ctx, args) => {
+    const user = await requireTeacher(ctx);
+    return { ctx: { ...ctx, user }, args };
+  },
+});
+
 export const teacherMutation = customMutation(mutation, {
   args: {},
   input: async (ctx, args) => {
     const user = await requireTeacher(ctx);
+    return { ctx: { ...ctx, user }, args };
+  },
+});
+
+export const operatorQuery = customQuery(query, {
+  args: {},
+  input: async (ctx, args) => {
+    const user = await requireOperator(ctx);
     return { ctx: { ...ctx, user }, args };
   },
 });

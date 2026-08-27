@@ -25,10 +25,12 @@ import type * as lib_customFunctions from "../lib/customFunctions.js";
 import type * as lib_sessionEnd from "../lib/sessionEnd.js";
 import type * as lib_transcript from "../lib/transcript.js";
 import type * as lib_validators from "../lib/validators.js";
+import type * as operator from "../operator.js";
 import type * as realtime from "../realtime.js";
 import type * as seed from "../seed.js";
 import type * as sessions from "../sessions.js";
 import type * as standards from "../standards.js";
+import type * as transcriptShares from "../transcriptShares.js";
 import type * as transcripts from "../transcripts.js";
 import type * as users from "../users.js";
 
@@ -56,10 +58,12 @@ declare const fullApi: ApiFromModules<{
   "lib/sessionEnd": typeof lib_sessionEnd;
   "lib/transcript": typeof lib_transcript;
   "lib/validators": typeof lib_validators;
+  operator: typeof operator;
   realtime: typeof realtime;
   seed: typeof seed;
   sessions: typeof sessions;
   standards: typeof standards;
+  transcriptShares: typeof transcriptShares;
   transcripts: typeof transcripts;
   users: typeof users;
 }>;
