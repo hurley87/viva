@@ -9,8 +9,12 @@
  */
 
 import type * as health from "../health.js";
+import type * as lib_auth from "../lib/auth.js";
+import type * as lib_customFunctions from "../lib/customFunctions.js";
+import type * as lib_validators from "../lib/validators.js";
 import type * as seed from "../seed.js";
 import type * as standards from "../standards.js";
+import type * as users from "../users.js";
 
 import type {
   ApiFromModules,
@@ -20,8 +24,12 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   health: typeof health;
+  "lib/auth": typeof lib_auth;
+  "lib/customFunctions": typeof lib_customFunctions;
+  "lib/validators": typeof lib_validators;
   seed: typeof seed;
   standards: typeof standards;
+  users: typeof users;
 }>;
 
 /**

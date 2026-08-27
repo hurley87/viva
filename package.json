@@ -7,10 +7,14 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "seed": "convex run seed:seed"
+    "seed": "convex run seed:seed",
+    "provision": "tsx --env-file=.env.local scripts/provision.ts",
+    "provision:void": "tsx --env-file=.env.local scripts/void.ts"
   },
   "dependencies": {
+    "@privy-io/react-auth": "^3.38.0",
     "convex": "^1.45.0",
+    "convex-helpers": "^0.1.123",
     "next": "16.3.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"
@@ -24,6 +28,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
     "tailwindcss": "^4",
+    "tsx": "^4.23.12",
     "typescript": "^5"
   }
 }

@@ -21,7 +21,9 @@ export default defineSchema({
     displayName: v.string(),
     role,
     status: v.union(v.literal("active"), v.literal("voided")),
-  }).index("by_privyDid", ["privyDid"]),
+  })
+    .index("by_privyDid", ["privyDid"])
+    .index("by_email", ["email"]),
 
   assignments: defineTable({
     title: v.string(),

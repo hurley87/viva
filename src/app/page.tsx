@@ -1,3 +1,4 @@
+import { AuthPanel } from "@/components/auth-panel";
 import { ConvexStatus } from "@/components/convex-status";
 
 export default function Home() {
@@ -10,6 +11,7 @@ export default function Home() {
           responds in a live voice Session. The transcript is assessed against
           that Standard.
         </p>
+        <AuthPanel />
         <ConvexStatus />
       </main>
     </div>
