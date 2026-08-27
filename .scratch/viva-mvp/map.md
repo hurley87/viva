@@ -39,6 +39,7 @@ Every decision blocking the solo MVP build is made, resolved via a ticket, or co
 - Grader prompt in detail: model decided ([Grader model choice]) and the Assessment schema is settled; the prompt wording waits on a real (or synthetic) Standard fixture to evaluate against.
 - Deployment & environment setup (Vercel/Convex projects, secrets, OpenAI keys): mechanical; ticket when the build starts.
 - Pilot logistics (dates, roster, physical/network setting): parked with Teacher engagement.
+- ASR-quality fallback (watch item, 2026-08): if pilot transcripts prove unreliable — especially accented speech, the ADR-0001 risk — evaluate a parallel streaming tee to a dedicated ASR (e.g. Google's Gemini 3.5 Transcribe Live, ~2.6–4.0% WER, 85+ languages). Respects no-audio-at-rest; costs a second vendor + second data processor in the INV-2 disclosure. Do nothing unless the problem actually shows up.
 
 ## Out of scope
 
