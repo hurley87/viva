@@ -62,3 +62,26 @@ export const mintResultValidator = v.union(
     message: v.string(),
   }),
 );
+
+export const transcriptSpeakerValidator = v.union(
+  v.literal("student"),
+  v.literal("examiner"),
+);
+
+export const transcriptTextStatusValidator = v.union(
+  v.literal("final"),
+  v.literal("failed"),
+  v.literal("truncated"),
+);
+
+export const transcriptSnapshotItemValidator = v.object({
+  itemId: v.string(),
+  orderKey: v.number(),
+  speaker: transcriptSpeakerValidator,
+  text: v.string(),
+  textStatus: transcriptTextStatusValidator,
+});
+
+export const transcriptUpsertResultValidator = v.object({
+  accepted: v.boolean(),
+});

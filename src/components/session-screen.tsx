@@ -15,6 +15,7 @@ import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { examinerCaptions } from "@/lib/examiner-captions";
 import { formatCountdown } from "@/lib/session-clock";
+import { useTranscriptPersistence } from "@/lib/use-transcript-persistence";
 
 const REALTIME_MODEL = "gpt-realtime-2.1";
 
@@ -138,6 +139,13 @@ function LiveSession({
   const createClientSecret = useAction(api.realtime.createClientSecret);
   const reportCallId = useMutation(api.sessions.reportCallId);
   const endSession = useMutation(api.sessions.end);
+  const {
+    onHistoryUpdated,
+    onAudioInterrupted,
+    onAgentEnd,
+    onTransportEvent,
+    flushNow,
+  } = useTranscriptPersistence(sessionId);
 
   const realtimeRef = useRef<RealtimeSession | null>(null);
   const warningSent = useRef(false);
@@ -167,6 +175,7 @@ function LiveSession({
       }
       ending.current = true;
       try {
+        await flushNow();
         await endSession({ sessionId, reason });
       } catch (finishError) {
         console.error("Failed to record Session end", finishError);
@@ -174,7 +183,7 @@ function LiveSession({
         closeRealtime();
       }
     },
-    [closeRealtime, endSession, sessionId],
+    [closeRealtime, endSession, flushNow, sessionId],
   );
 
   useEffect(() => {
@@ -250,6 +259,16 @@ function LiveSession({
 
         realtime.on("history_updated", (history: RealtimeItem[]) => {
           setCaptions(examinerCaptions(history));
+          onHistoryUpdated(history);
+        });
+        realtime.on("audio_interrupted", () => {
+          onAudioInterrupted();
+        });
+        realtime.on("agent_end", () => {
+          onAgentEnd();
+        });
+        realtime.on("transport_event", (event: { type: string }) => {
+          onTransportEvent(event);
         });
 
         await realtime.connect({ apiKey: minted.clientSecret });
@@ -283,7 +302,17 @@ function LiveSession({
       cancelled = true;
       closeRealtime();
     };
-  }, [closeRealtime, createClientSecret, finish, reportCallId, sessionId]);
+  }, [
+    closeRealtime,
+    createClientSecret,
+    finish,
+    onAgentEnd,
+    onAudioInterrupted,
+    onHistoryUpdated,
+    onTransportEvent,
+    reportCallId,
+    sessionId,
+  ]);
 
   return (
     <main className="mx-auto flex w-full max-w-xl flex-1 flex-col gap-6 px-6 py-12">
