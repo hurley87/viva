@@ -5,8 +5,9 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 /**
  * INV-3 module boundary.
  *
- * This is the only module that may read or write the `standards` table.
- * Session-mint and examiner code must never import this file — that lint
+ * This is the only module that may write the `standards` table (seed also
+ * inserts the demo Standard). `convex/grader/*` is the only Session-path
+ * reader. Mint and examiner code must never import this file — that lint
  * lands in issue #8. Do not add examiner/mint helpers here.
  */
 

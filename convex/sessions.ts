@@ -2,6 +2,8 @@
  * INV-3: Session mint must never import convex/standards.ts.
  * Examiner instructions are assembled in convex/examiner/instructions.ts
  * and injected only when minting the ephemeral Realtime token.
+ * Session end schedules the Grader via the generated `internal` API so this
+ * file does not import convex/grader or convex/standards.
  */
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -27,6 +29,7 @@ import {
   estimateRealtimeSpendUsd,
   mapToolReasonToEndReason,
 } from "./lib/sessionEnd";
+import { TRANSCRIPT_WRITE_GRACE_MS } from "./lib/transcript";
 import {
   mintResultValidator,
   sessionEndReasonValidator,
@@ -109,6 +112,27 @@ async function finalizeEndedSession(
       sessionId: session._id,
       usd: estimateRealtimeSpendUsd(args.endedAt - startedAt),
     });
+  }
+
+  const existingAssessment = await ctx.db
+    .query("assessments")
+    .withIndex("by_session", (q) => q.eq("sessionId", session._id))
+    .unique();
+
+  if (!existingAssessment) {
+    await ctx.db.insert("assessments", {
+      sessionId: session._id,
+      status: "pending",
+      released: false,
+    });
+  }
+
+  if (!existingAssessment || existingAssessment.status !== "complete") {
+    await ctx.scheduler.runAfter(
+      TRANSCRIPT_WRITE_GRACE_MS,
+      internal.grader.actions.gradeSession,
+      { sessionId: session._id },
+    );
   }
 }
 

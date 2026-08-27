@@ -85,3 +85,33 @@ export const transcriptSnapshotItemValidator = v.object({
 export const transcriptUpsertResultValidator = v.object({
   accepted: v.boolean(),
 });
+
+export const criterionRatingValidator = v.union(
+  v.literal("established"),
+  v.literal("partially_established"),
+  v.literal("not_established"),
+  v.literal("not_probed"),
+);
+
+export const assessmentStatusValidator = v.union(
+  v.literal("pending"),
+  v.literal("complete"),
+  v.literal("failed"),
+);
+
+export const assessmentCriterionValidator = v.object({
+  name: v.string(),
+  rating: criterionRatingValidator,
+  evidence: v.array(v.string()),
+});
+
+export const inv1FlagValidator = v.object({
+  quote: v.string(),
+  explanation: v.string(),
+});
+
+export const graderTranscriptTurnValidator = v.object({
+  speaker: transcriptSpeakerValidator,
+  text: v.string(),
+  textStatus: transcriptTextStatusValidator,
+});

@@ -8,8 +8,16 @@
  * @module
  */
 
+import type * as assessments from "../assessments.js";
 import type * as examiner_constants from "../examiner/constants.js";
 import type * as examiner_instructions from "../examiner/instructions.js";
+import type * as grader_actions from "../grader/actions.js";
+import type * as grader_align from "../grader/align.js";
+import type * as grader_constants from "../grader/constants.js";
+import type * as grader_cost from "../grader/cost.js";
+import type * as grader_mutations from "../grader/mutations.js";
+import type * as grader_prompt from "../grader/prompt.js";
+import type * as grader_queries from "../grader/queries.js";
 import type * as health from "../health.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_caps from "../lib/caps.js";
@@ -31,8 +39,16 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  assessments: typeof assessments;
   "examiner/constants": typeof examiner_constants;
   "examiner/instructions": typeof examiner_instructions;
+  "grader/actions": typeof grader_actions;
+  "grader/align": typeof grader_align;
+  "grader/constants": typeof grader_constants;
+  "grader/cost": typeof grader_cost;
+  "grader/mutations": typeof grader_mutations;
+  "grader/prompt": typeof grader_prompt;
+  "grader/queries": typeof grader_queries;
   health: typeof health;
   "lib/auth": typeof lib_auth;
   "lib/caps": typeof lib_caps;
