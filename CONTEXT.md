@@ -30,6 +30,10 @@ _Avoid_: recording
 The structured evaluation of one Session transcript against the pinned Standard, including the Examiner audit (INV-1 flags).
 _Avoid_: grade, score, mark, result
 
+**Shadow period**:
+The opening span of a deployment in which Assessments are released to the Teacher only; immediate auto-release to Students begins once the Teacher has spot-checked Grader quality.
+_Avoid_: soft launch, review gate
+
 ### Human roles
 
 **Teacher**:
@@ -43,6 +47,16 @@ _Avoid_: defender, cadet, candidate, user
 **Operator**:
 Whoever runs the deployment. Sees aggregate metrics, spend, and flag rates only—never transcript content (INV-2).
 _Avoid_: admin
+
+### Operations
+
+**Mint**:
+Create a Session at request time: cap + breaker checks, Assignment-version pinning, scheduled hangup. Applies only to Sessions.
+_Avoid_: using "mint" for account creation
+
+**Provision**:
+Create a Teacher or Student account by hand: pre-create the Privy user, allowlist the email, insert the Convex user row with its role.
+_Avoid_: mint, invite, onboard
 
 ### System agents
 

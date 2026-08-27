@@ -1,12 +1,13 @@
-# Viva v1.3 — PRD
+# Viva v1.4 — PRD
 
-**Status:** Simplified oral-assessment revision (supersedes v1.2)
+**Status:** MVP-build revision (supersedes v1.3)
 **Owner:** Dave
 **Design partner (deployment #1):** Teacher (academic pilot lead)
-**Pilot window:** Course weeks 5–9 (hard external deadline — date TBC)
+**Pilot window:** TBD — scheduling parked with Teacher engagement; build proceeds now
 **v1.1 delta:** education role model established (Standard / Session / Assessment; Teacher / Student), premise reframed as proof-of-understanding layer. **Build scope unchanged from v1.**
 **v1.2 delta (grilling revision):** institution class named + policy risk split from technical; Assignment added to the domain model (1:1 with Standard); INV-1 bar stated as detect-not-prevent; INV-2 gains designed break-glass + honest OpenAI retention posture; spend-cap edge semantics added (forgiving caps, mint-only breaker, all spend counts) + server-enforced time-box note; magic links expire; no audio at rest (ADR-0001); Standard shape (criteria + descriptors) and 3-level qualitative ratings; immediate Assessment auto-release; fresh examiner per Session; French deliberately unhandled.
 **v1.3 delta:** written submission removed from v1. Each Session is an oral response to an Assignment, and its transcript is the sole evidence evaluated against the pinned Standard.
+**v1.4 delta (MVP charting):** pilot dates unpinned — solo MVP, build proceeds now; institutional network/policy verification dropped as a blocking caveat (a safe, secure test setting is chosen at deployment); shadow-period release added for a deployment's first real Sessions; INV-4 time-box build note corrected — the server *can* end a live call via the Realtime calls hangup endpoint; oral-only scope reconfirmed: a Session probes a prompted question, no artifact or written submission; auth concretized — Privy email OTP + allowlist, hand-provisioned accounts, 7-day link expiry deferred to roster era.
 
 ---
 
@@ -45,7 +46,7 @@ Naming rule: code, schema, API, UI copy, and documentation use **Teacher** and *
 | Attempts | Unlimited, all informal | No "official attempt" state machine; cost caps required instead (INV-4) |
 | Scope | Single academic deployment | Litigation track deferred to v2; no multi-tenant build, but domain model is tenant-shaped |
 | REB posture | Pedagogy pilot under TCPS 2 Art. 2.5 QI carve-out | No control group, no research claims from this pilot, transcripts stay in course boundary |
-| Transport | OpenAI Realtime via `openai-agents-js` (`RealtimeAgent` / `RealtimeSession`, WebRTC) (ADR-0003) | Subject to institutional network and policy verification |
+| Transport | OpenAI Realtime via `openai-agents-js` (`RealtimeAgent` / `RealtimeSession`, WebRTC) (ADR-0003) | Vendor lock-in on the session path accepted; test setting chosen at deployment |
 | App stack | Next.js / Vercel / Convex | Standard stack; no new infra |
 | Audio retention | No audio at rest — transcript is the only Session record (ADR-0001) | ASR-error risk accepted (formative stakes); transcript disputes resolved by Teacher judgment |
 
@@ -74,14 +75,14 @@ The Standard is used only by the post-session grader. The live examiner receives
 Unlimited informal attempts + realtime voice pricing + fixed $5K grant = per-Student and global caps, enforced server-side at session mint.
 *Mechanisms:* per-Student cap (default: 2 sessions/day, 8/week), global monthly budget circuit-breaker, hard session time-box (default: 15 min) with 2-min warning, all configurable by the Teacher within Operator-set ceilings.
 *Edge semantics:* (a) Sessions under a minimum-duration floor (default: 3 min — e.g. network drop) do not burn an attempt; the mint cost is sunk but the Student is not punished. (b) The breaker blocks new mints only — it never terminates a live Session. (c) *All* model spend counts against the budget: realtime, grader, and guardrail classifier.
-*Build note:* the time-box must be enforced by our own server logic. OpenAI ephemeral tokens only limit connection *start* (≈1-min TTL), not session duration; the platform cap is 60 min. Nothing upstream ends a session at 15:00 for us.
+*Build note:* the time-box is enforced by our own server logic. OpenAI ephemeral tokens only limit connection *start*, not session duration; the platform cap is 60 min. The server *can* end a live call: at mint, schedule a job (Convex scheduler) that calls `POST /v1/realtime/calls/{call_id}/hangup` at 15:00 (call ID surfaced by the SDK from the WebRTC SDP exchange). The client countdown is UX, not enforcement; the server additionally refuses to persist or grade content past the cutoff.
 *Done-means:* cap-exceeded mint request returns friendly refusal; budget breaker tested; short-session cap-forgiveness tested.
 
 ## 5. Architecture
 
 ```
 Student browser (Next.js)
-  → POST /api/session/mint             [auth via magic link, cap check, Assignment version pinned]
+  → POST /api/session/mint             [auth via Privy email OTP, cap check, Assignment version pinned]
   → ephemeral Realtime token returned   [instructions assembled + injected server-side only]
   → RealtimeAgent("Examiner") / RealtimeSession over WebRTC
   → live Session (time-boxed, VAD/interruption via SDK)
@@ -102,7 +103,7 @@ Examiner and grader are separate models with separate contexts. The examiner is 
 | Student | Take unlimited Sessions within caps; read own transcripts + feedback | Read others' anything; see the private Standard verbatim |
 | Operator | Deploy; view aggregate metrics, spend, INV-1 flag rates, error logs | Read transcript content (INV-2, enforced) |
 
-Auth: Teacher-issued magic links against an uploaded roster. No SSO, no passwords. Impersonation is not a threat in v1 (nothing at stake) — but a *leaked* link is a budget-drain and boundary-pollution threat (strangers burning realtime spend under a roster identity, stranger voices entering the course boundary). Links therefore expire (default: 7 days) and the Teacher can void and re-issue per roster entry; per-Student caps (INV-4) bound the blast radius of any single leak.
+Auth: passwordless email login via Privy (6-digit one-time code — Privy has no magic-link variant; same property, nothing to remember, no passwords, no SSO). MVP accounts are **provisioned** by hand: one script pre-creates the Privy user (returning its DID), adds the email to Privy's allowlist, and inserts the Convex user row with its role. The allowlist blocks strangers at Privy's door — a non-allowlisted email cannot create an account at all — which, with per-Student caps (INV-4), bounds the budget-drain/boundary-pollution threat of any leaked credential. Impersonation remains a non-threat in v1 (nothing at stake). Voiding a Student is two steps: flip the Convex user status *and* delete the Privy user object (removing the allowlist entry alone does not revoke an existing user; lockout completes within the 1-hour access-token window). Auto-expiry of invitations (formerly 7 days) is deferred to roster-era link issuing — hand-provisioned accounts don't need it. ("Provision" = create an account; "mint" stays reserved for creating Sessions.)
 
 ## 7. Session shape (defaults — Teacher redlines)
 
@@ -122,3 +123,5 @@ The Assessment is a structured evaluation against the Standard: per-criterion ra
 The grader receives the transcript as quoted evidence, never as instructions. Student speech is attacker-controlled, so the grader prompt explicitly treats instructions inside the transcript as inert. Residual spoken prompt-injection risk is accepted in v1 because Assessments are formative; it must be closed before any stakes-bearing deployment.
 
 Release: immediate auto-release — grading runs directly after the Session and the formative summary reaches the Student within minutes, while the defense is warm. No Teacher gate (the loop's tempo must not depend on one busy person); the Teacher sees every Assessment on the dashboard and can flag bad feedback after the fact.
+
+Cold-start exception — **shadow period**: a deployment's first real Sessions release Assessments to the Teacher only. Once the Teacher has spot-checked Grader quality, auto-release becomes the steady state. The gate exists once, at the start of a deployment — never per-Assessment.
