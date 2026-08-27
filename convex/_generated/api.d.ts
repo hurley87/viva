@@ -31,6 +31,7 @@ import type * as seed from "../seed.js";
 import type * as sessions from "../sessions.js";
 import type * as standards from "../standards.js";
 import type * as studentFeedback from "../studentFeedback.js";
+import type * as teacher from "../teacher.js";
 import type * as transcriptShares from "../transcriptShares.js";
 import type * as transcripts from "../transcripts.js";
 import type * as users from "../users.js";
@@ -65,6 +66,7 @@ declare const fullApi: ApiFromModules<{
   sessions: typeof sessions;
   standards: typeof standards;
   studentFeedback: typeof studentFeedback;
+  teacher: typeof teacher;
   transcriptShares: typeof transcriptShares;
   transcripts: typeof transcripts;
   users: typeof users;

@@ -1,6 +1,7 @@
 import { AuthPanel } from "@/components/auth-panel";
 import { ConvexStatus } from "@/components/convex-status";
 import { StartSession } from "@/components/start-session";
+import { TeacherHomeLink } from "./teacher/home-link";
 
 export default function Home() {
   return (
@@ -14,6 +15,7 @@ export default function Home() {
         </p>
         <AuthPanel />
         <StartSession />
+        <TeacherHomeLink />
         <ConvexStatus />
       </main>
     </div>
