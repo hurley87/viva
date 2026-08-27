@@ -29,6 +29,7 @@ import type * as realtime from "../realtime.js";
 import type * as seed from "../seed.js";
 import type * as sessions from "../sessions.js";
 import type * as standards from "../standards.js";
+import type * as teacher from "../teacher.js";
 import type * as transcripts from "../transcripts.js";
 import type * as users from "../users.js";
 
@@ -60,6 +61,7 @@ declare const fullApi: ApiFromModules<{
   seed: typeof seed;
   sessions: typeof sessions;
   standards: typeof standards;
+  teacher: typeof teacher;
   transcripts: typeof transcripts;
   users: typeof users;
 }>;

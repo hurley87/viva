@@ -37,6 +37,14 @@ export const studentMutation = customMutation(mutation, {
   },
 });
 
+export const teacherQuery = customQuery(query, {
+  args: {},
+  input: async (ctx, args) => {
+    const user = await requireTeacher(ctx);
+    return { ctx: { ...ctx, user }, args };
+  },
+});
+
 export const teacherMutation = customMutation(mutation, {
   args: {},
   input: async (ctx, args) => {
