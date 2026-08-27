@@ -8,11 +8,17 @@
  * @module
  */
 
+import type * as examiner_constants from "../examiner/constants.js";
+import type * as examiner_instructions from "../examiner/instructions.js";
 import type * as health from "../health.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_caps from "../lib/caps.js";
 import type * as lib_customFunctions from "../lib/customFunctions.js";
+import type * as lib_sessionEnd from "../lib/sessionEnd.js";
 import type * as lib_validators from "../lib/validators.js";
+import type * as realtime from "../realtime.js";
 import type * as seed from "../seed.js";
+import type * as sessions from "../sessions.js";
 import type * as standards from "../standards.js";
 import type * as users from "../users.js";
 
@@ -23,11 +29,17 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "examiner/constants": typeof examiner_constants;
+  "examiner/instructions": typeof examiner_instructions;
   health: typeof health;
   "lib/auth": typeof lib_auth;
+  "lib/caps": typeof lib_caps;
   "lib/customFunctions": typeof lib_customFunctions;
+  "lib/sessionEnd": typeof lib_sessionEnd;
   "lib/validators": typeof lib_validators;
+  realtime: typeof realtime;
   seed: typeof seed;
+  sessions: typeof sessions;
   standards: typeof standards;
   users: typeof users;
 }>;

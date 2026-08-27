@@ -20,3 +20,45 @@ export const userPublicValidator = v.object({
   role: roleValidator,
   status: userStatusValidator,
 });
+
+export const sessionEndToolReasonValidator = v.union(
+  v.literal("timebox"),
+  v.literal("dead_threads"),
+  v.literal("student_request"),
+  v.literal("disconnected"),
+);
+
+export const sessionEndReasonValidator = v.union(
+  v.literal("student_hangup"),
+  v.literal("timebox"),
+  v.literal("examiner_ended"),
+  v.literal("disconnected"),
+);
+
+export const sessionStatusValidator = v.union(
+  v.literal("minted"),
+  v.literal("live"),
+  v.literal("ended"),
+);
+
+export const mintRefusalCodeValidator = v.union(
+  v.literal("breaker"),
+  v.literal("daily_cap"),
+  v.literal("weekly_cap"),
+);
+
+export const mintResultValidator = v.union(
+  v.object({
+    ok: v.literal(true),
+    sessionId: v.id("sessions"),
+    startedAt: v.number(),
+    timeboxSec: v.number(),
+    warningAtSec: v.number(),
+    minDurationSec: v.number(),
+  }),
+  v.object({
+    ok: v.literal(false),
+    code: mintRefusalCodeValidator,
+    message: v.string(),
+  }),
+);

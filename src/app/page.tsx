@@ -1,5 +1,6 @@
 import { AuthPanel } from "@/components/auth-panel";
 import { ConvexStatus } from "@/components/convex-status";
+import { StartSession } from "@/components/start-session";
 
 export default function Home() {
   return (
@@ -12,6 +13,7 @@ export default function Home() {
           that Standard.
         </p>
         <AuthPanel />
+        <StartSession />
         <ConvexStatus />
       </main>
     </div>

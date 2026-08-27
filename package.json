@@ -12,12 +12,14 @@
     "provision:void": "tsx --env-file=.env.local scripts/void.ts"
   },
   "dependencies": {
+    "@openai/agents": "^0.17.0",
     "@privy-io/react-auth": "^3.38.0",
     "convex": "^1.45.0",
     "convex-helpers": "^0.1.123",
     "next": "16.3.0",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@convex-dev/eslint-plugin": "^4.0.0",

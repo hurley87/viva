@@ -40,3 +40,13 @@ export async function requireUser(
 
   return user;
 }
+
+export async function requireStudent(
+  ctx: QueryCtx | MutationCtx,
+): Promise<Doc<"users">> {
+  const user = await requireUser(ctx);
+  if (user.role !== "student") {
+    throw new Error("Unauthorized: Student access required");
+  }
+  return user;
+}
