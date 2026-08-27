@@ -9,6 +9,7 @@ import {
 } from "@openai/agents/realtime";
 import { useAction, useMutation, useQuery } from "convex/react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { api } from "../../convex/_generated/api";
@@ -97,18 +98,11 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
 
   if (session.status === "ended") {
     return (
-      <main className="mx-auto flex w-full max-w-xl flex-col gap-4 px-6 py-12">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {session.assignmentTitle}
-        </h1>
-        <p>
-          This Session has ended
-          {session.endReason ? ` — ${endReasonCopy(session.endReason)}` : "."}
-        </p>
-        <Link className="text-sm underline" href="/">
-          Back home
-        </Link>
-      </main>
+      <EndedSessionHandoff
+        sessionId={session._id}
+        assignmentTitle={session.assignmentTitle}
+        endReason={session.endReason}
+      />
     );
   }
 
@@ -120,6 +114,41 @@ export function SessionScreen({ sessionId }: { sessionId: string }) {
       timeboxSec={session.timeboxSec}
       warningAtSec={session.warningAtSec}
     />
+  );
+}
+
+function EndedSessionHandoff({
+  sessionId,
+  assignmentTitle,
+  endReason,
+}: {
+  sessionId: Id<"sessions">;
+  assignmentTitle: string;
+  endReason:
+    | "student_hangup"
+    | "timebox"
+    | "examiner_ended"
+    | "disconnected"
+    | undefined;
+}) {
+  const router = useRouter();
+
+  useEffect(() => {
+    router.replace(`/feedback/${sessionId}`);
+  }, [router, sessionId]);
+
+  return (
+    <main className="mx-auto flex w-full max-w-xl flex-col gap-4 px-6 py-12">
+      <h1 className="text-2xl font-semibold tracking-tight">{assignmentTitle}</h1>
+      <p>
+        This Session has ended
+        {endReason ? ` — ${endReasonCopy(endReason)}` : "."} Opening your
+        transcript…
+      </p>
+      <Link className="text-sm underline" href={`/feedback/${sessionId}`}>
+        View transcript and feedback
+      </Link>
+    </main>
   );
 }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { api } from "../../convex/_generated/api";
@@ -64,6 +65,9 @@ export function StartSession() {
       {error ? (
         <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
       ) : null}
+      <Link className="text-sm underline" href="/feedback">
+        Your Sessions
+      </Link>
     </div>
   );
 }

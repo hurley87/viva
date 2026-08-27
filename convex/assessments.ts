@@ -4,7 +4,7 @@ import { teacherMutation } from "./lib/customFunctions";
 
 /**
  * Teacher release after shadow-period review. Idempotent if already released.
- * Student projection of formativeSummary is ticket #6 — this only flips the flag.
+ * Student projection of formativeSummary lives in convex/studentFeedback.ts.
  */
 export const release = teacherMutation({
   args: { assessmentId: v.id("assessments") },
