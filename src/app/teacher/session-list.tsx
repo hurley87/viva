@@ -8,17 +8,8 @@ import {
   formatWhen,
   sessionStatusLabel,
 } from "./copy";
-import { TeacherShell } from "./teacher-shell";
 
 export function TeacherSessionList() {
-  return (
-    <TeacherShell>
-      <SessionListBody />
-    </TeacherShell>
-  );
-}
-
-function SessionListBody() {
   const dashboard = useQuery(api.teacher.listSessions, {});
 
   if (dashboard === undefined) {

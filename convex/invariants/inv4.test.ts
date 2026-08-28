@@ -206,3 +206,60 @@ test("realtime and grader spend both count against the monthly breaker", async (
     message: BREAKER_MESSAGE,
   });
 });
+
+test("daily cap counts newest Sessions after more than one index page", async () => {
+  const t = setup();
+  await t.run(async (ctx) => {
+    const world = await seedWorld(ctx);
+    const now = Date.now();
+    const eightDaysAgo = now - 8 * 24 * 60 * 60 * 1000;
+    for (let i = 0; i < 256; i += 1) {
+      await ctx.db.insert("sessions", {
+        studentId: world.studentId,
+        assignmentVersionId: world.assignmentVersionId,
+        status: "ended",
+        startedAt: eightDaysAgo,
+        endedAt: eightDaysAgo + 240_000,
+        endReason: "student_hangup",
+        openaiCallId: `call_old_${i}`,
+        countsAgainstCaps: true,
+      });
+    }
+    for (let i = 0; i < 2; i += 1) {
+      await ctx.db.insert("sessions", {
+        studentId: world.studentId,
+        assignmentVersionId: world.assignmentVersionId,
+        status: "ended",
+        startedAt: now - 60_000,
+        endedAt: now,
+        endReason: "student_hangup",
+        openaiCallId: `call_today_${i}`,
+        countsAgainstCaps: true,
+      });
+    }
+  });
+
+  const asStudent = t.withIdentity(identity.student);
+  const result = await asStudent.mutation(api.sessions.mint, {});
+  expect(result).toEqual({
+    ok: false,
+    code: "daily_cap",
+    message: DAILY_CAP_MESSAGE,
+  });
+});
+
+test("mint fails when more than one Assignment exists", async () => {
+  const t = setup();
+  await t.run(async (ctx) => {
+    const world = await seedWorld(ctx);
+    await ctx.db.insert("assignments", {
+      title: "Second assignment",
+      teacherId: world.teacherId,
+    });
+  });
+
+  const asStudent = t.withIdentity(identity.student);
+  await expect(asStudent.mutation(api.sessions.mint, {})).rejects.toThrow(
+    /exactly one Assignment/i,
+  );
+});

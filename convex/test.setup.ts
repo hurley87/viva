@@ -8,6 +8,5 @@ export const modules = import.meta.glob([
   "./**/*.{js,ts}",
   "!./**/*.d.ts",
   "!./**/*.test.ts",
-  "!./realtime.ts",
   "!./grader/actions.ts",
 ]);

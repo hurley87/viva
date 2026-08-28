@@ -23,8 +23,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Typecheck
+      - name: Typecheck Convex
         run: npx tsc --noEmit -p convex/tsconfig.json
+
+      - name: Typecheck app
+        run: npx tsc --noEmit
 
       - name: Convex invariant tests
         run: npm run test:once

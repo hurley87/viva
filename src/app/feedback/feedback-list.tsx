@@ -3,6 +3,7 @@
 import { useQuery } from "convex/react";
 import Link from "next/link";
 import { api } from "../../../convex/_generated/api";
+import { SignedInStudent } from "@/components/signed-in-student";
 
 function formatEndedAt(endedAt: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -12,43 +13,20 @@ function formatEndedAt(endedAt: number): string {
 }
 
 export function FeedbackList() {
-  const me = useQuery(api.users.me);
-  const sessions = useQuery(
-    api.studentFeedback.listMine,
-    me?.role === "student" ? {} : "skip",
+  return (
+    <SignedInStudent
+      title="Your Sessions"
+      loadingCopy="Loading Sessions…"
+      signedOutCopy="Sign in as a Student to see your transcript and feedback."
+      wrongRoleCopy="Session feedback is shown to the Student who took the Session."
+    >
+      <FeedbackListForStudent />
+    </SignedInStudent>
   );
+}
 
-  if (me === undefined || (me?.role === "student" && sessions === undefined)) {
-    return (
-      <main className="mx-auto flex w-full max-w-xl flex-col gap-4 px-6 py-12">
-        <p>Loading Sessions…</p>
-      </main>
-    );
-  }
-
-  if (me === null) {
-    return (
-      <main className="mx-auto flex w-full max-w-xl flex-col gap-4 px-6 py-12">
-        <h1 className="text-2xl font-semibold tracking-tight">Your Sessions</h1>
-        <p>Sign in as a Student to see your transcript and feedback.</p>
-        <Link className="text-sm underline" href="/">
-          Back home
-        </Link>
-      </main>
-    );
-  }
-
-  if (me.role !== "student") {
-    return (
-      <main className="mx-auto flex w-full max-w-xl flex-col gap-4 px-6 py-12">
-        <h1 className="text-2xl font-semibold tracking-tight">Your Sessions</h1>
-        <p>Session feedback is shown to the Student who took the Session.</p>
-        <Link className="text-sm underline" href="/">
-          Back home
-        </Link>
-      </main>
-    );
-  }
+function FeedbackListForStudent() {
+  const sessions = useQuery(api.studentFeedback.listMine, {});
 
   return (
     <main className="mx-auto flex w-full max-w-xl flex-col gap-6 px-6 py-12">

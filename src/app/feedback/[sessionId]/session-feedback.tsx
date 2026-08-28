@@ -1,28 +1,14 @@
 "use client";
 
 import { useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import Link from "next/link";
 import { api } from "../../../../convex/_generated/api";
-import type { Id } from "../../../../convex/_generated/dataModel";
-
-function endReasonCopy(
-  reason: "student_hangup" | "timebox" | "examiner_ended" | "disconnected",
-): string {
-  switch (reason) {
-    case "timebox":
-      return "Time is up.";
-    case "examiner_ended":
-      return "The Examiner ended the Session.";
-    case "student_hangup":
-      return "You ended the Session.";
-    case "disconnected":
-      return "The Session disconnected.";
-    default: {
-      const exhaustive: never = reason;
-      return exhaustive;
-    }
-  }
-}
+import {
+  SignedInStudent,
+  StudentResourceGate,
+} from "@/components/signed-in-student";
+import { studentEndReasonCopy } from "@/lib/student-end-reason";
 
 function speakerLabel(speaker: "student" | "examiner"): string {
   switch (speaker) {
@@ -51,57 +37,40 @@ function turnDisplayText(turn: {
 }
 
 export function SessionFeedback({ sessionId }: { sessionId: string }) {
-  const typedSessionId = sessionId as Id<"sessions">;
-  const me = useQuery(api.users.me);
-  const view = useQuery(
-    api.studentFeedback.getMine,
-    me?.role === "student" ? { sessionId: typedSessionId } : "skip",
+  return (
+    <SignedInStudent
+      title="Feedback"
+      loadingCopy="Loading feedback…"
+      signedOutCopy="Sign in as a Student to see your transcript and feedback."
+      wrongRoleCopy="Session feedback is shown to the Student who took the Session."
+    >
+      <SessionFeedbackForStudent sessionId={sessionId} />
+    </SignedInStudent>
   );
+}
 
-  if (me === undefined || (me?.role === "student" && view === undefined)) {
-    return (
-      <main className="mx-auto flex w-full max-w-xl flex-col gap-4 px-6 py-12">
-        <p>Loading feedback…</p>
-      </main>
-    );
-  }
+function SessionFeedbackForStudent({ sessionId }: { sessionId: string }) {
+  const view = useQuery(api.studentFeedback.getMine, { sessionId });
 
-  if (me === null) {
-    return (
-      <main className="mx-auto flex w-full max-w-xl flex-col gap-4 px-6 py-12">
-        <h1 className="text-2xl font-semibold tracking-tight">Feedback</h1>
-        <p>Sign in as a Student to see your transcript and feedback.</p>
-        <Link className="text-sm underline" href="/">
-          Back home
-        </Link>
-      </main>
-    );
-  }
+  return (
+    <StudentResourceGate
+      title="Feedback"
+      loadingCopy="Loading feedback…"
+      notFoundCopy="This Session was not found, or it does not belong to you."
+      notFoundHref="/feedback"
+      notFoundHrefLabel="Your Sessions"
+      resource={view}
+    >
+      {(loaded) => <SessionFeedbackBody view={loaded} />}
+    </StudentResourceGate>
+  );
+}
 
-  if (me.role !== "student") {
-    return (
-      <main className="mx-auto flex w-full max-w-xl flex-col gap-4 px-6 py-12">
-        <h1 className="text-2xl font-semibold tracking-tight">Feedback</h1>
-        <p>Session feedback is shown to the Student who took the Session.</p>
-        <Link className="text-sm underline" href="/">
-          Back home
-        </Link>
-      </main>
-    );
-  }
-
-  if (view === null || view === undefined) {
-    return (
-      <main className="mx-auto flex w-full max-w-xl flex-col gap-4 px-6 py-12">
-        <h1 className="text-2xl font-semibold tracking-tight">Feedback</h1>
-        <p>This Session was not found, or it does not belong to you.</p>
-        <Link className="text-sm underline" href="/feedback">
-          Your Sessions
-        </Link>
-      </main>
-    );
-  }
-
+function SessionFeedbackBody({
+  view,
+}: {
+  view: NonNullable<FunctionReturnType<typeof api.studentFeedback.getMine>>;
+}) {
   return (
     <main className="mx-auto flex w-full max-w-xl flex-col gap-6 px-6 py-12">
       <div>
@@ -111,7 +80,7 @@ export function SessionFeedback({ sessionId }: { sessionId: string }) {
         </h1>
         {view.status === "ended" && view.endReason ? (
           <p className="mt-2 text-zinc-600 dark:text-zinc-400">
-            {endReasonCopy(view.endReason)}
+            {studentEndReasonCopy(view.endReason)}
           </p>
         ) : null}
         {view.status !== "ended" ? (

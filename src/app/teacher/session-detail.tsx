@@ -3,7 +3,6 @@
 import { useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 import { useState } from "react";
-import type { Id } from "../../../convex/_generated/dataModel";
 import { api } from "../../../convex/_generated/api";
 import {
   assessmentStatusLabel,
@@ -15,33 +14,16 @@ import {
   sessionStatusLabel,
   speakerLabel,
 } from "./copy";
-import { TeacherShell } from "./teacher-shell";
 
 export function TeacherSessionDetail({ sessionId }: { sessionId: string }) {
-  return (
-    <TeacherShell>
-      <SessionDetailBody sessionId={sessionId} />
-    </TeacherShell>
-  );
-}
-
-function isSessionId(value: string): value is Id<"sessions"> {
-  return /^[a-z0-9]{20,}$/i.test(value);
-}
-
-function SessionDetailBody({ sessionId }: { sessionId: string }) {
-  const typedSessionId = isSessionId(sessionId) ? sessionId : null;
-  const detail = useQuery(
-    api.teacher.getSession,
-    typedSessionId ? { sessionId: typedSessionId } : "skip",
-  );
+  const detail = useQuery(api.teacher.getSession, { sessionId });
   const release = useMutation(api.assessments.release);
   const retry = useMutation(api.assessments.retry);
   const [error, setError] = useState<string | null>(null);
   const [isReleasing, setIsReleasing] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
 
-  if (typedSessionId === null || detail === null) {
+  if (detail === null) {
     return (
       <>
         <h1 className="text-2xl font-semibold tracking-tight">Session</h1>

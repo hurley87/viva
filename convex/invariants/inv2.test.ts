@@ -97,6 +97,21 @@ test("operator identity does not leak student, transcript, or assessment secrets
   await expect(
     asOperator.query(api.transcriptShares.getForSession, { sessionId }),
   ).rejects.toThrow(/Unauthorized/i);
+  await expect(
+    asOperator.query(api.studentFeedback.listMine, {}),
+  ).rejects.toThrow(/Unauthorized/i);
+  await expect(
+    asOperator.query(api.studentFeedback.getMine, { sessionId }),
+  ).rejects.toThrow(/Unauthorized/i);
+  await expect(asOperator.query(api.teacher.listSessions, {})).rejects.toThrow(
+    /Unauthorized/i,
+  );
+  await expect(
+    asOperator.query(api.teacher.getSession, { sessionId }),
+  ).rejects.toThrow(/Unauthorized/i);
+  await expect(
+    asOperator.action(api.realtime.createClientSecret, { sessionId }),
+  ).rejects.toThrow(/Unauthorized/i);
 });
 
 test("break-glass transcript read requires a Teacher-granted share row", async () => {

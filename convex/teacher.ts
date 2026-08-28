@@ -1,6 +1,5 @@
 import { v } from "convex/values";
-import type { Doc, Id } from "./_generated/dataModel";
-import type { QueryCtx } from "./_generated/server";
+import { assignmentTitleForVersion } from "./lib/assignmentTitle";
 import { loadDeploymentConfig } from "./lib/caps";
 import { teacherQuery } from "./lib/customFunctions";
 import {
@@ -44,20 +43,6 @@ const assessmentViewValidator = v.object({
   releasedAt: v.optional(v.number()),
 });
 
-async function assignmentTitleForSession(
-  ctx: QueryCtx,
-  session: Doc<"sessions">,
-): Promise<string> {
-  const version = await ctx.db.get(
-    "assignmentVersions",
-    session.assignmentVersionId,
-  );
-  const assignment = version
-    ? await ctx.db.get("assignments", version.assignmentId)
-    : null;
-  return assignment?.title ?? "Assignment";
-}
-
 /**
  * Newest-first Session list for the Teacher dashboard.
  * Bounded: a single-course MVP will not approach 200 Sessions.
@@ -72,36 +57,30 @@ export const listSessions = teacherQuery({
     const config = await loadDeploymentConfig(ctx);
     const sessions = await ctx.db.query("sessions").order("desc").take(200);
 
-    const items: Array<{
-      _id: Id<"sessions">;
-      status: Doc<"sessions">["status"];
-      startedAt: number;
-      studentDisplayName: string;
-      assignmentTitle: string;
-      assessmentStatus: Doc<"assessments">["status"] | "none";
-      released: boolean;
-      inv1FlagCount: number;
-      endedAt?: number;
-    }> = [];
-    for (const session of sessions) {
-      const student = await ctx.db.get("users", session.studentId);
-      const assessment = await ctx.db
-        .query("assessments")
-        .withIndex("by_session", (q) => q.eq("sessionId", session._id))
-        .unique();
+    const items = await Promise.all(
+      sessions.map(async (session) => {
+        const [student, assessment, assignmentTitle] = await Promise.all([
+          ctx.db.get("users", session.studentId),
+          ctx.db
+            .query("assessments")
+            .withIndex("by_session", (q) => q.eq("sessionId", session._id))
+            .unique(),
+          assignmentTitleForVersion(ctx, session.assignmentVersionId),
+        ]);
 
-      items.push({
-        _id: session._id,
-        status: session.status,
-        startedAt: session.startedAt ?? session._creationTime,
-        studentDisplayName: student?.displayName ?? "Unknown Student",
-        assignmentTitle: await assignmentTitleForSession(ctx, session),
-        assessmentStatus: assessment?.status ?? ("none" as const),
-        released: assessment?.released ?? false,
-        inv1FlagCount: assessment?.inv1Flags?.length ?? 0,
-        ...(session.endedAt !== undefined ? { endedAt: session.endedAt } : {}),
-      });
-    }
+        return {
+          _id: session._id,
+          status: session.status,
+          startedAt: session.startedAt ?? session._creationTime,
+          studentDisplayName: student?.displayName ?? "Unknown Student",
+          assignmentTitle,
+          assessmentStatus: assessment?.status ?? ("none" as const),
+          released: assessment?.released ?? false,
+          inv1FlagCount: assessment?.inv1Flags?.length ?? 0,
+          ...(session.endedAt !== undefined ? { endedAt: session.endedAt } : {}),
+        };
+      }),
+    );
 
     return {
       releaseMode: config.releaseMode,
@@ -115,7 +94,7 @@ export const listSessions = teacherQuery({
  * Returns null when the Session id does not exist.
  */
 export const getSession = teacherQuery({
-  args: { sessionId: v.id("sessions") },
+  args: { sessionId: v.string() },
   returns: v.union(
     v.object({
       session: v.object({
@@ -136,28 +115,30 @@ export const getSession = teacherQuery({
     v.null(),
   ),
   handler: async (ctx, args) => {
-    const session = await ctx.db.get("sessions", args.sessionId);
+    const sessionId = ctx.db.normalizeId("sessions", args.sessionId);
+    if (!sessionId) {
+      return null;
+    }
+    const session = await ctx.db.get("sessions", sessionId);
     if (!session) {
       return null;
     }
 
-    const config = await loadDeploymentConfig(ctx);
-    const student = await ctx.db.get("users", session.studentId);
-    const version = await ctx.db.get(
-      "assignmentVersions",
-      session.assignmentVersionId,
-    );
-    const assignment = version
-      ? await ctx.db.get("assignments", version.assignmentId)
-      : null;
-    const assessment = await ctx.db
-      .query("assessments")
-      .withIndex("by_session", (q) => q.eq("sessionId", session._id))
-      .unique();
-    const transcriptItems = await ctx.db
-      .query("transcriptItems")
-      .withIndex("by_session_order", (q) => q.eq("sessionId", session._id))
-      .take(4096);
+    const [config, student, version, assignmentTitle, assessment, transcriptItems] =
+      await Promise.all([
+        loadDeploymentConfig(ctx),
+        ctx.db.get("users", session.studentId),
+        ctx.db.get("assignmentVersions", session.assignmentVersionId),
+        assignmentTitleForVersion(ctx, session.assignmentVersionId),
+        ctx.db
+          .query("assessments")
+          .withIndex("by_session", (q) => q.eq("sessionId", session._id))
+          .unique(),
+        ctx.db
+          .query("transcriptItems")
+          .withIndex("by_session_order", (q) => q.eq("sessionId", session._id))
+          .take(4096),
+      ]);
 
     return {
       session: {
@@ -166,7 +147,7 @@ export const getSession = teacherQuery({
         startedAt: session.startedAt ?? session._creationTime,
         studentDisplayName: student?.displayName ?? "Unknown Student",
         studentEmail: student?.email ?? "",
-        assignmentTitle: assignment?.title ?? "Assignment",
+        assignmentTitle,
         assignmentPrompt: version?.prompt ?? "",
         ...(session.endedAt !== undefined ? { endedAt: session.endedAt } : {}),
         ...(session.endReason !== undefined

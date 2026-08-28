@@ -32,17 +32,22 @@ export async function loadDeploymentConfig(ctx: QueryCtx | MutationCtx) {
   return config;
 }
 
+const SPEND_TAKE = 4096;
+const SESSION_CAP_TAKE = 512;
+
 export async function sumSpendThisMonth(
   ctx: QueryCtx | MutationCtx,
   now: number,
 ): Promise<number> {
   const monthStart = utcMonthStartMs(now);
-  const events = await ctx.db.query("spendEvents").take(4096);
+  const events = await ctx.db
+    .query("spendEvents")
+    .withIndex("by_creation_time", (q) => q.gte("_creationTime", monthStart))
+    .take(SPEND_TAKE);
+
   let total = 0;
   for (const event of events) {
-    if (event._creationTime >= monthStart) {
-      total += event.usd;
-    }
+    total += event.usd;
   }
   return total;
 }
@@ -53,20 +58,32 @@ export async function countCappedSessionsInWindow(
   now: number,
   windowMs: number,
 ): Promise<number> {
+  const cutoff = now - windowMs;
   const sessions = await ctx.db
     .query("sessions")
     .withIndex("by_student", (q) => q.eq("studentId", studentId))
-    .take(256);
-  const cutoff = now - windowMs;
+    .order("desc")
+    .take(SESSION_CAP_TAKE);
+
   let count = 0;
+  let crossedCutoff = false;
   for (const session of sessions) {
     if (!countsTowardCap(session)) {
       continue;
     }
-    if (sessionStartMs(session) >= cutoff) {
-      count += 1;
+    if (sessionStartMs(session) < cutoff) {
+      crossedCutoff = true;
+      break;
     }
+    count += 1;
   }
+
+  if (!crossedCutoff && sessions.length === SESSION_CAP_TAKE) {
+    throw new Error(
+      "Session cap window exceeded scan limit; newest Sessions would be dropped.",
+    );
+  }
+
   return count;
 }
 

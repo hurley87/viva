@@ -8,6 +8,7 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
+import { assignmentTitleForVersion } from "./lib/assignmentTitle";
 import { studentQuery } from "./lib/customFunctions";
 import {
   sessionEndReasonValidator,
@@ -72,18 +73,6 @@ function projectReleasedSummary(
   return { state: "pending" };
 }
 
-async function assignmentTitleForVersion(
-  ctx: QueryCtx,
-  assignmentVersionId: Id<"assignmentVersions">,
-): Promise<string> {
-  const version = await ctx.db.get("assignmentVersions", assignmentVersionId);
-  if (!version) {
-    return "Assignment";
-  }
-  const assignment = await ctx.db.get("assignments", version.assignmentId);
-  return assignment?.title ?? "Assignment";
-}
-
 async function assessmentForSession(
   ctx: QueryCtx,
   sessionId: Id<"sessions">,
@@ -123,31 +112,34 @@ export const listMine = studentQuery({
     const ended = sessions.filter(
       (session) => session.status === "ended" && session.endedAt !== undefined,
     );
-    const summaries = [];
 
-    for (const session of ended) {
-      const assessment = await assessmentForSession(ctx, session._id);
-      const feedback = projectReleasedSummary(assessment);
-      summaries.push({
-        sessionId: session._id,
-        assignmentTitle: await assignmentTitleForVersion(
-          ctx,
-          session.assignmentVersionId,
-        ),
-        feedbackState: feedback.state,
-        ...(session.endedAt !== undefined ? { endedAt: session.endedAt } : {}),
-      });
-    }
-
-    return summaries;
+    return await Promise.all(
+      ended.map(async (session) => {
+        const [assessment, assignmentTitle] = await Promise.all([
+          assessmentForSession(ctx, session._id),
+          assignmentTitleForVersion(ctx, session.assignmentVersionId),
+        ]);
+        const feedback = projectReleasedSummary(assessment);
+        return {
+          sessionId: session._id,
+          assignmentTitle,
+          feedbackState: feedback.state,
+          ...(session.endedAt !== undefined ? { endedAt: session.endedAt } : {}),
+        };
+      }),
+    );
   },
 });
 
 export const getMine = studentQuery({
-  args: { sessionId: v.id("sessions") },
+  args: { sessionId: v.string() },
   returns: v.union(studentSessionFeedbackValidator, v.null()),
   handler: async (ctx, args) => {
-    const session = await ctx.db.get("sessions", args.sessionId);
+    const sessionId = ctx.db.normalizeId("sessions", args.sessionId);
+    if (!sessionId) {
+      return null;
+    }
+    const session = await ctx.db.get("sessions", sessionId);
     if (!session || session.studentId !== ctx.user._id) {
       return null;
     }

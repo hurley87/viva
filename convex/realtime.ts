@@ -1,6 +1,3 @@
-"use node";
-
-import { createHash } from "node:crypto";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { action, internalAction } from "./_generated/server";
@@ -22,8 +19,14 @@ function requireOpenAiKey(): string {
   return apiKey;
 }
 
-function safetyIdentifier(userId: string): string {
-  return createHash("sha256").update(`viva:${userId}`).digest("hex");
+async function safetyIdentifier(userId: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`viva:${userId}`),
+  );
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 function readClientSecret(payload: unknown): string {
@@ -49,7 +52,6 @@ export const createClientSecret = action({
   args: { sessionId: v.id("sessions") },
   returns: v.object({
     clientSecret: v.string(),
-    examinerInstructions: v.string(),
   }),
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
@@ -70,7 +72,7 @@ export const createClientSecret = action({
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
-          "OpenAI-Safety-Identifier": safetyIdentifier(examiner.userId),
+          "OpenAI-Safety-Identifier": await safetyIdentifier(examiner.userId),
         },
         body: JSON.stringify({
           expires_after: { anchor: "created_at", seconds: CLIENT_SECRET_TTL_SEC },
@@ -100,7 +102,7 @@ export const createClientSecret = action({
     }
 
     const clientSecret = readClientSecret(await response.json());
-    return { clientSecret, examinerInstructions };
+    return { clientSecret };
   },
 });
 

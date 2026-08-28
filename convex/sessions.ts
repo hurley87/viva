@@ -23,6 +23,7 @@ import {
   sumSpendThisMonth,
   weeklyCappedCount,
 } from "./lib/caps";
+import { assignmentTitleForVersion } from "./lib/assignmentTitle";
 import { studentMutation, studentQuery } from "./lib/customFunctions";
 import {
   countsAgainstCapsAtEnd,
@@ -58,7 +59,14 @@ async function pinHighestPublishedVersion(
   assignmentId: Id<"assignments">;
   assignmentVersionId: Id<"assignmentVersions">;
 }> {
-  const assignment = await ctx.db.query("assignments").first();
+  const assignments = await ctx.db.query("assignments").take(2);
+  if (assignments.length === 0) {
+    throw new Error("No Assignment is published.");
+  }
+  if (assignments.length > 1) {
+    throw new Error("Mint expects exactly one Assignment.");
+  }
+  const assignment = assignments[0];
   if (!assignment) {
     throw new Error("No Assignment is published.");
   }
@@ -197,22 +205,22 @@ export const mint = studentMutation({
 });
 
 export const get = studentQuery({
-  args: { sessionId: v.id("sessions") },
+  args: { sessionId: v.string() },
   returns: sessionViewValidator,
   handler: async (ctx, args) => {
-    const session = await ctx.db.get("sessions", args.sessionId);
+    const sessionId = ctx.db.normalizeId("sessions", args.sessionId);
+    if (!sessionId) {
+      return null;
+    }
+    const session = await ctx.db.get("sessions", sessionId);
     if (!session || session.studentId !== ctx.user._id) {
       return null;
     }
 
-    const config = await loadDeploymentConfig(ctx);
-    const version = await ctx.db.get(
-      "assignmentVersions",
-      session.assignmentVersionId,
-    );
-    const assignment = version
-      ? await ctx.db.get("assignments", version.assignmentId)
-      : null;
+    const [config, assignmentTitle] = await Promise.all([
+      loadDeploymentConfig(ctx),
+      assignmentTitleForVersion(ctx, session.assignmentVersionId),
+    ]);
 
     return {
       _id: session._id,
@@ -221,7 +229,7 @@ export const get = studentQuery({
       timeboxSec: config.timeboxSec,
       warningAtSec: config.warningAtSec,
       minDurationSec: config.minDurationSec,
-      assignmentTitle: assignment?.title ?? "Assignment",
+      assignmentTitle,
       ...(session.endedAt !== undefined ? { endedAt: session.endedAt } : {}),
       ...(session.endReason !== undefined
         ? { endReason: session.endReason }

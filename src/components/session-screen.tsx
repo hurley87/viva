@@ -14,106 +14,63 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
+import {
+  REALTIME_MODEL,
+  REALTIME_VOICE,
+  TRANSCRIPTION_MODEL,
+} from "../../convex/examiner/constants";
+import { SignedInStudent, StudentResourceGate } from "@/components/signed-in-student";
 import { examinerCaptions } from "@/lib/examiner-captions";
 import { formatCountdown } from "@/lib/session-clock";
+import { studentEndReasonCopy } from "@/lib/student-end-reason";
 import { useTranscriptPersistence } from "@/lib/use-transcript-persistence";
-
-const REALTIME_MODEL = "gpt-realtime-2.1";
 
 const buttonClassName =
   "rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900";
 
 type ToolReason = "timebox" | "dead_threads" | "student_request";
 
-function endReasonCopy(
-  reason: "student_hangup" | "timebox" | "examiner_ended" | "disconnected",
-): string {
-  switch (reason) {
-    case "timebox":
-      return "Time is up.";
-    case "examiner_ended":
-      return "The Examiner ended the Session.";
-    case "student_hangup":
-      return "You ended the Session.";
-    case "disconnected":
-      return "The Session disconnected.";
-    default: {
-      const exhaustive: never = reason;
-      return exhaustive;
-    }
-  }
+export function SessionScreen({ sessionId }: { sessionId: string }) {
+  return (
+    <SignedInStudent
+      title="Session"
+      loadingCopy="Loading Session…"
+      signedOutCopy="Sign in as a Student to start or resume a Session."
+      wrongRoleCopy="Live Sessions are taken by Students."
+    >
+      <SessionScreenForStudent sessionId={sessionId} />
+    </SignedInStudent>
+  );
 }
 
-export function SessionScreen({ sessionId }: { sessionId: string }) {
-  const typedSessionId = sessionId as Id<"sessions">;
-  const me = useQuery(api.users.me);
-  const session = useQuery(
-    api.sessions.get,
-    me?.role === "student" ? { sessionId: typedSessionId } : "skip",
-  );
-
-  if (me === undefined || (me?.role === "student" && session === undefined)) {
-    return (
-      <main className="mx-auto flex w-full max-w-xl flex-col gap-4 px-6 py-12">
-        <p>Loading Session…</p>
-      </main>
-    );
-  }
-
-  if (me === null) {
-    return (
-      <main className="mx-auto flex w-full max-w-xl flex-col gap-4 px-6 py-12">
-        <h1 className="text-2xl font-semibold tracking-tight">Session</h1>
-        <p>Sign in as a Student to start or resume a Session.</p>
-        <Link className="text-sm underline" href="/">
-          Back home
-        </Link>
-      </main>
-    );
-  }
-
-  if (me.role !== "student") {
-    return (
-      <main className="mx-auto flex w-full max-w-xl flex-col gap-4 px-6 py-12">
-        <h1 className="text-2xl font-semibold tracking-tight">Session</h1>
-        <p>Live Sessions are taken by Students.</p>
-        <Link className="text-sm underline" href="/">
-          Back home
-        </Link>
-      </main>
-    );
-  }
-
-  if (session === null || session === undefined) {
-    return (
-      <main className="mx-auto flex w-full max-w-xl flex-col gap-4 px-6 py-12">
-        <h1 className="text-2xl font-semibold tracking-tight">Session</h1>
-        <p>This Session was not found, or it does not belong to you.</p>
-        <Link className="text-sm underline" href="/">
-          Back home
-        </Link>
-      </main>
-    );
-  }
-
-  if (session.status === "ended") {
-    return (
-      <EndedSessionHandoff
-        sessionId={session._id}
-        assignmentTitle={session.assignmentTitle}
-        endReason={session.endReason}
-      />
-    );
-  }
+function SessionScreenForStudent({ sessionId }: { sessionId: string }) {
+  const session = useQuery(api.sessions.get, { sessionId });
 
   return (
-    <LiveSession
-      sessionId={typedSessionId}
-      assignmentTitle={session.assignmentTitle}
-      startedAt={session.startedAt}
-      timeboxSec={session.timeboxSec}
-      warningAtSec={session.warningAtSec}
-    />
+    <StudentResourceGate
+      title="Session"
+      loadingCopy="Loading Session…"
+      notFoundCopy="This Session was not found, or it does not belong to you."
+      resource={session}
+    >
+      {(loaded) =>
+        loaded.status === "ended" ? (
+          <EndedSessionHandoff
+            sessionId={loaded._id}
+            assignmentTitle={loaded.assignmentTitle}
+            endReason={loaded.endReason}
+          />
+        ) : (
+          <LiveSession
+            sessionId={loaded._id}
+            assignmentTitle={loaded.assignmentTitle}
+            startedAt={loaded.startedAt}
+            timeboxSec={loaded.timeboxSec}
+            warningAtSec={loaded.warningAtSec}
+          />
+        )
+      }
+    </StudentResourceGate>
   );
 }
 
@@ -142,7 +99,7 @@ function EndedSessionHandoff({
       <h1 className="text-2xl font-semibold tracking-tight">{assignmentTitle}</h1>
       <p>
         This Session has ended
-        {endReason ? ` — ${endReasonCopy(endReason)}` : "."} Opening your
+        {endReason ? ` — ${studentEndReasonCopy(endReason)}` : "."} Opening your
         transcript…
       </p>
       <Link className="text-sm underline" href={`/feedback/${sessionId}`}>
@@ -263,7 +220,6 @@ function LiveSession({
 
         const agent = new RealtimeAgent({
           name: "Examiner",
-          instructions: minted.examinerInstructions,
           tools: [endSessionTool],
         });
 
@@ -276,12 +232,12 @@ function LiveSession({
             audio: {
               input: {
                 transcription: {
-                  model: "gpt-live-transcribe",
+                  model: TRANSCRIPTION_MODEL,
                   delay: "low",
                   languages: ["en"],
                 },
               },
-              output: { voice: "marin" },
+              output: { voice: REALTIME_VOICE },
             },
           },
         });
