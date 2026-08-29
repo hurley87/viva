@@ -3,20 +3,21 @@
 // The front door. Signed out, it explains Viva and points at /login. Signed
 // in, it routes by role — Student to /student, Teacher to /teacher.
 //
-// Those routes do not exist yet (tickets #3 and #6 build them), so for now a
-// signed-in visitor gets a placeholder that shows the role Convex resolved for
-// them and a way out. The placeholder proves the whole identity chain
-// end-to-end: Privy session → access token → Convex JWKS verification → Privy
-// DID → the `users` row and its role. When the real routes land, replace the
-// placeholder with the redirect.
+// The Student route exists (ticket #3), so a Student is redirected straight to
+// it. The Teacher dashboard is ticket #7; until it lands a Teacher gets the
+// placeholder, which still proves the whole identity chain end-to-end: Privy
+// session → access token → Convex JWKS verification → Privy DID → the `users`
+// row and its role.
 
 import { useQuery } from "convex/react";
 import { Authenticated, AuthLoading, Unauthenticated } from "convex/react";
 import { usePrivy } from "@privy-io/react-auth";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 import { api } from "../../convex/_generated/api";
 
-/** Where each role lands once tickets #3 and #6 have built the routes. */
+/** Where each role lands. `/teacher` is ticket #7 and is not built yet. */
 const HOME_ROUTE = {
   student: "/student",
   teacher: "/teacher",
@@ -106,12 +107,23 @@ function SignedOut() {
 
 function SignedIn() {
   const { logout } = usePrivy();
+  const router = useRouter();
   const me = useQuery(api.users.me);
+
+  // A Student's home is their Assignment, not this page.
+  const isStudent = me?.role === "student";
+  useEffect(() => {
+    if (isStudent) {
+      router.replace(HOME_ROUTE.student);
+    }
+  }, [isStudent, router]);
 
   return (
     <section className="mt-10 border-t border-zinc-200 pt-6 dark:border-zinc-800">
       {me === undefined ? (
         <p className="text-sm text-zinc-500">Resolving your account…</p>
+      ) : isStudent ? (
+        <p className="text-sm text-zinc-500">Taking you to your Assignment…</p>
       ) : me === null ? (
         <>
           <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">

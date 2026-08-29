@@ -32,3 +32,41 @@ export const CONNECT_GRACE_SEC = 120;
  * constant when that ticket lands.
  */
 export const REALTIME_USD_PER_MINUTE = 0.3;
+
+/**
+ * The OpenAI Realtime model that conducts a Session. Pinned rather than
+ * defaulted so an SDK upgrade cannot silently change the Examiner's voice or
+ * behaviour mid-pilot. `gpt-realtime-2.1` is also the SDK's own default and
+ * the model the Examiner prompt was pressure-tested against.
+ */
+export const REALTIME_MODEL = "gpt-realtime-2.1";
+
+/**
+ * The Examiner's voice. `marin` and `cedar` are the two OpenAI recommends for
+ * quality; `marin` reads as neutral and unhurried, which is what an
+ * examination wants.
+ */
+export const EXAMINER_VOICE = "marin";
+
+/**
+ * The ASR model that transcribes the Student's speech. Input transcription is
+ * a separate best-effort pass, not the Examiner's own hearing — a Student turn
+ * can legitimately end up with no text at all (see the transcript-capture
+ * research, .scratch/viva-mvp/issues/03-transcript-capture-and-timebox.md).
+ */
+export const INPUT_TRANSCRIPTION_MODEL = "gpt-live-transcribe";
+
+/**
+ * The text model that will grade a Session (ticket #5). Pinned here so the
+ * Examiner and the Grader model ids sit side by side and neither can drift
+ * unnoticed. `gpt-5.6-sol` is the current flagship.
+ */
+export const GRADER_MODEL = "gpt-5.6-sol";
+
+/**
+ * Lifetime of the OpenAI Realtime client secret handed to the browser. It
+ * gates connection START only — it cannot time-box a Session — so it is kept
+ * short: long enough to cover a page navigation and a microphone permission
+ * prompt, too short to hoard.
+ */
+export const CLIENT_SECRET_TTL_SEC = 120;

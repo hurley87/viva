@@ -8,11 +8,17 @@
  * @module
  */
 
+import type * as assignments from "../assignments.js";
 import type * as deployment from "../deployment.js";
+import type * as examiner_instructions from "../examiner/instructions.js";
+import type * as examiner_realtime from "../examiner/realtime.js";
 import type * as lib_config from "../lib/config.js";
 import type * as lib_constants from "../lib/constants.js";
 import type * as lib_identity from "../lib/identity.js";
+import type * as lib_time from "../lib/time.js";
 import type * as seed from "../seed.js";
+import type * as sessions from "../sessions.js";
+import type * as spend from "../spend.js";
 import type * as standards from "../standards.js";
 import type * as users from "../users.js";
 
@@ -23,11 +29,17 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  assignments: typeof assignments;
   deployment: typeof deployment;
+  "examiner/instructions": typeof examiner_instructions;
+  "examiner/realtime": typeof examiner_realtime;
   "lib/config": typeof lib_config;
   "lib/constants": typeof lib_constants;
   "lib/identity": typeof lib_identity;
+  "lib/time": typeof lib_time;
   seed: typeof seed;
+  sessions: typeof sessions;
+  spend: typeof spend;
   standards: typeof standards;
   users: typeof users;
 }>;
