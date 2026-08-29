@@ -45,6 +45,12 @@ import {
   REALTIME_MODEL,
 } from "../../../../convex/lib/constants";
 import { takeClientSecret } from "../../../lib/sessionHandoff";
+import {
+  createTranscriptRecorder,
+  toTranscriptRows,
+  turnSignal,
+  type TranscriptRecorder,
+} from "../../../lib/transcript";
 
 /** How long the Examiner's closing sentence is given to finish playing. */
 const CLOSING_AUDIO_MS = 2_000;
@@ -55,6 +61,13 @@ const CLOSING_AUDIO_MS = 2_000;
  * enforcement path; this only spares the Student a few seconds of silence.
  */
 const CLIENT_HANGUP_GRACE_SEC = 12;
+
+/**
+ * How long a change to the Transcript may sit in this tab before it is written
+ * to Convex. It is the worst case a crashed tab costs: everything older than
+ * this is already durable (ticket #4 / ADR-0001).
+ */
+const TRANSCRIPT_DEBOUNCE_MS = 1_000;
 
 const SYSTEM_WARNING_NOTE = "[SYSTEM: two minutes remaining]";
 const SYSTEM_TIME_UP_NOTE = "[SYSTEM: time is up]";
@@ -151,6 +164,7 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
   const details = useQuery(api.sessions.getForStudent, { sessionId });
   const startSession = useMutation(api.sessions.start);
   const endSession = useMutation(api.sessions.end);
+  const upsertTranscript = useMutation(api.transcript.upsert);
 
   const [phase, setPhase] = useState<Phase>("connecting");
   const [failure, setFailure] = useState<string | null>(null);
@@ -167,6 +181,7 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
     ((reason: ClientEndReason, closeDelayMs?: number) => void) | null
   >(null);
   const captionsEndRef = useRef<HTMLDivElement | null>(null);
+  const recorderRef = useRef<TranscriptRecorder | null>(null);
 
   /**
    * End the Session, once. Every path lands here: the Examiner's `end_session`
@@ -180,6 +195,10 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
         return;
       }
       endingRef.current = true;
+      // Before anything else: get the last turns out of this tab. The server
+      // accepts writes for a short grace past the end, so this lands even when
+      // the reason for ending is the time-box.
+      recorderRef.current?.flush();
       setPhase("ending");
       void endSession({ sessionId, reason }).catch(() => {
         // The Session ends regardless: the scheduled server job finalizes it.
@@ -250,15 +269,89 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
     realtimeRef.current = realtime;
 
     // ---------------------------------------------------------------------
-    // TICKET #4 SEAM — transcript persistence.
-    // `history_updated` is handled in exactly one place, here. It carries the
-    // SDK's reconciled snapshot of the whole conversation, keyed by `itemId`,
-    // which is the shape ticket #4 upserts into `transcriptItems`. Add the
-    // debounced upsert call inside this handler; nothing else on this page
-    // reads history, so nothing else needs to change.
+    // Transcript persistence (ADR-0001: the Transcript is the sole Session
+    // record). Rows are derived from the SDK's reconciled history snapshots —
+    // keyed by `itemId`, never assembled from raw deltas — and upserted
+    // continuously, so a killed tab costs at most TRANSCRIPT_DEBOUNCE_MS of
+    // conversation rather than the Session.
+    //
+    // The debounce is bypassed at the three moments a turn stops changing: an
+    // ASR final (or failure) landing, a barge-in truncation, and the Examiner
+    // finishing a turn. `finish` flushes on the way out, and so does a closing
+    // tab. The server refuses anything past the time-box regardless.
     // ---------------------------------------------------------------------
+    const recorder = createTranscriptRecorder(
+      (rows) => upsertTranscript({ sessionId, items: [...rows] }),
+      TRANSCRIPT_DEBOUNCE_MS,
+    );
+    recorderRef.current = recorder;
+
+    // The latest snapshot, so an event that is not `history_updated` can still
+    // re-derive rows from the reconciled history rather than from itself.
+    let latestHistory: RealtimeItem[] = [];
+    const truncatedItemIds = new Set<string>();
+    // Set when a turn has settled but its reconciled text has not arrived yet:
+    // the snapshot that follows is written without waiting out the debounce.
+    let flushOnNextSnapshot = false;
+
+    // The recorder is deliberately not disposed here, for the same reason
+    // this effect has no teardown: React's development double-mount would
+    // dispose the one the surviving mount is using.
+    function persist(immediate: boolean) {
+      recorder.record(toTranscriptRows(latestHistory, { truncatedItemIds }));
+      if (immediate) {
+        recorder.flush();
+      }
+    }
+
     realtime.on("history_updated", (history) => {
+      latestHistory = history;
       setCaptions(examinerCaptions(history));
+      const immediate = flushOnNextSnapshot;
+      flushOnNextSnapshot = false;
+      persist(immediate);
+    });
+
+    // Every raw server event passes through here. Only two matter to the
+    // Transcript: a Student turn's ASR settling (completed or failed — both
+    // mean the turn will not change again), and the truncation of an Examiner
+    // turn, whose item id arrives nowhere else.
+    realtime.on("transport_event", (event) => {
+      const signal = turnSignal(event);
+      if (signal === null) {
+        return;
+      }
+      if (signal.kind === "truncated") {
+        truncatedItemIds.add(signal.itemId);
+      }
+      // The reconciled item follows this event (the SDK re-retrieves it), so
+      // flush what is pending now and again as soon as the snapshot arrives.
+      flushOnNextSnapshot = true;
+      persist(true);
+    });
+
+    // Barge-in. The WebRTC transport handles audio itself and generally does
+    // not raise this — `conversation.item.truncated` above is the reliable
+    // signal — so this is a belt-and-braces mark on whichever Examiner turn
+    // was still speaking.
+    realtime.on("audio_interrupted", () => {
+      for (let i = latestHistory.length - 1; i >= 0; i -= 1) {
+        const item = latestHistory[i];
+        if (
+          item.type === "message" &&
+          item.role === "assistant" &&
+          item.status === "in_progress"
+        ) {
+          truncatedItemIds.add(item.itemId);
+          break;
+        }
+      }
+      persist(true);
+    });
+
+    // The Examiner finished a turn: its transcript is complete, write it now.
+    realtime.on("agent_end", () => {
+      persist(true);
     });
 
     realtime.on("error", (error) => {
@@ -319,7 +412,7 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
     }
 
     void boot();
-  }, [details, endSession, sessionId, startSession]);
+  }, [details, endSession, sessionId, startSession, upsertTranscript]);
 
   // The countdown, the two-minute warning, and the time-up note. All three are
   // driven from one timer so they cannot disagree with each other.
@@ -381,6 +474,9 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
       if (endingRef.current) {
         return;
       }
+      // Best effort, and the reason the debounce exists: everything older than
+      // one second is already in Convex whether or not this write survives.
+      recorderRef.current?.flush();
       realtimeRef.current?.close();
       void endSession({ sessionId, reason: "disconnected" }).catch(() => {});
     }

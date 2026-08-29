@@ -20,6 +20,7 @@ import type * as seed from "../seed.js";
 import type * as sessions from "../sessions.js";
 import type * as spend from "../spend.js";
 import type * as standards from "../standards.js";
+import type * as transcript from "../transcript.js";
 import type * as users from "../users.js";
 
 import type {
@@ -41,6 +42,7 @@ declare const fullApi: ApiFromModules<{
   sessions: typeof sessions;
   spend: typeof spend;
   standards: typeof standards;
+  transcript: typeof transcript;
   users: typeof users;
 }>;
 
