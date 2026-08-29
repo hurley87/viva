@@ -25,6 +25,7 @@ import type * as sessions from "../sessions.js";
 import type * as spend from "../spend.js";
 import type * as standards from "../standards.js";
 import type * as student from "../student.js";
+import type * as teacher from "../teacher.js";
 import type * as transcript from "../transcript.js";
 import type * as users from "../users.js";
 
@@ -52,6 +53,7 @@ declare const fullApi: ApiFromModules<{
   spend: typeof spend;
   standards: typeof standards;
   student: typeof student;
+  teacher: typeof teacher;
   transcript: typeof transcript;
   users: typeof users;
 }>;

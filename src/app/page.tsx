@@ -3,11 +3,11 @@
 // The front door. Signed out, it explains Viva and points at /login. Signed
 // in, it routes by role — Student to /student, Teacher to /teacher.
 //
-// The Student route exists (ticket #3), so a Student is redirected straight to
-// it. The Teacher dashboard is ticket #7; until it lands a Teacher gets the
-// placeholder, which still proves the whole identity chain end-to-end: Privy
-// session → access token → Convex JWKS verification → Privy DID → the `users`
-// row and its role.
+// Both of those routes exist, so both roles are redirected straight to their
+// own home; nobody's home is this page. The Operator surface is not built, so
+// an Operator stays here and is told so. The redirect is what proves the whole
+// identity chain end-to-end: Privy session → access token → Convex JWKS
+// verification → Privy DID → the `users` row and its role.
 
 import { useQuery } from "convex/react";
 import { Authenticated, AuthLoading, Unauthenticated } from "convex/react";
@@ -17,7 +17,7 @@ import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { api } from "../../convex/_generated/api";
 
-/** Where each role lands. `/teacher` is ticket #7 and is not built yet. */
+/** Where each role lands. `/operator` is out of the MVP surface cut. */
 const HOME_ROUTE = {
   student: "/student",
   teacher: "/teacher",
@@ -110,20 +110,31 @@ function SignedIn() {
   const router = useRouter();
   const me = useQuery(api.users.me);
 
-  // A Student's home is their Assignment, not this page.
-  const isStudent = me?.role === "student";
+  // A Student's home is their Assignment and a Teacher's is their Sessions.
+  // Neither is this page, so neither stops here.
+  const role = me?.role;
+  const redirectTo =
+    role === "student"
+      ? HOME_ROUTE.student
+      : role === "teacher"
+        ? HOME_ROUTE.teacher
+        : null;
   useEffect(() => {
-    if (isStudent) {
-      router.replace(HOME_ROUTE.student);
+    if (redirectTo !== null) {
+      router.replace(redirectTo);
     }
-  }, [isStudent, router]);
+  }, [redirectTo, router]);
 
   return (
     <section className="mt-10 border-t border-zinc-200 pt-6 dark:border-zinc-800">
       {me === undefined ? (
         <p className="text-sm text-zinc-500">Resolving your account…</p>
-      ) : isStudent ? (
-        <p className="text-sm text-zinc-500">Taking you to your Assignment…</p>
+      ) : redirectTo !== null ? (
+        <p className="text-sm text-zinc-500">
+          {role === "teacher"
+            ? "Taking you to your Sessions…"
+            : "Taking you to your Assignment…"}
+        </p>
       ) : me === null ? (
         <>
           <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">
