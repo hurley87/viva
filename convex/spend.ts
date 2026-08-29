@@ -85,22 +85,45 @@ export const record = internalMutation({
 // ---------------------------------------------------------------------------
 
 /**
- * Total estimated spend, in USD, for the current calendar month (UTC).
+ * Every spend event in the current calendar month (UTC), newest last.
  *
- * `spendEvents` has no index in the approved schema: the table is small in the
- * MVP and the breaker needs a sum over one month, which no index would make
- * meaningfully cheaper at this size. Revisit when a deployment writes
- * thousands of rows a month.
+ * Read through Convex's built-in `by_creation_time` index rather than as a
+ * full-table scan. That is not an optimisation, it is a correctness fix: this
+ * read happens inside `sessions.prepareMint`, `spendEvents` is never pruned,
+ * and a scan of every row ever written crosses Convex's per-transaction read
+ * ceiling within months at the pilot's own arithmetic (two rows per Session,
+ * ~3,600 rows a month at 30 Students x 2 Sessions a day). Past that point the
+ * INV-4 gate would not refuse a mint kindly — it would throw, and no Session
+ * could be minted at all.
+ *
+ * Scoped to the month, the read is bounded by one month's rows and resets at
+ * every month boundary, so it cannot grow into the same wall.
  */
+export async function monthToDateSpendEvents(
+  ctx: QueryCtx | MutationCtx,
+  now: number,
+): Promise<Doc<"spendEvents">[]> {
+  const monthStart = startOfCalendarMonthUtc(now);
+  return await ctx.db
+    .query("spendEvents")
+    .withIndex("by_creation_time", (q) =>
+      q.gte("_creationTime", monthStart),
+    )
+    .collect();
+}
+
+/** Total estimated spend, in USD, for the current calendar month (UTC). */
 export async function monthToDateSpendUsd(
   ctx: QueryCtx | MutationCtx,
   now: number,
 ): Promise<number> {
-  const monthStart = startOfCalendarMonthUtc(now);
-  const events = await ctx.db.query("spendEvents").collect();
-  return events
-    .filter((event) => event._creationTime >= monthStart)
-    .reduce((total, event) => total + event.usd, 0);
+  const events = await monthToDateSpendEvents(ctx, now);
+  return sumUsd(events);
+}
+
+/** The USD total of a set of spend events. */
+export function sumUsd(events: readonly Doc<"spendEvents">[]): number {
+  return events.reduce((total, event) => total + event.usd, 0);
 }
 
 /** What the breaker decided, and the numbers it decided it from. */
