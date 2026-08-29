@@ -1,16 +1,29 @@
 "use client";
 
-// Landing page. Its only job in this ticket is to prove the browser reaches
-// Convex: it subscribes to the deployment readiness query and reports what the
-// backend says. Role routing (Student → /student, Teacher → /teacher) arrives
-// with auth in ticket #2.
+// The front door. Signed out, it explains Viva and points at /login. Signed
+// in, it routes by role — Student to /student, Teacher to /teacher.
+//
+// Those routes do not exist yet (tickets #3 and #6 build them), so for now a
+// signed-in visitor gets a placeholder that shows the role Convex resolved for
+// them and a way out. The placeholder proves the whole identity chain
+// end-to-end: Privy session → access token → Convex JWKS verification → Privy
+// DID → the `users` row and its role. When the real routes land, replace the
+// placeholder with the redirect.
 
 import { useQuery } from "convex/react";
+import { Authenticated, AuthLoading, Unauthenticated } from "convex/react";
+import { usePrivy } from "@privy-io/react-auth";
+import Link from "next/link";
 import { api } from "../../convex/_generated/api";
 
-export default function Home() {
-  const readiness = useQuery(api.deployment.readiness);
+/** Where each role lands once tickets #3 and #6 have built the routes. */
+const HOME_ROUTE = {
+  student: "/student",
+  teacher: "/teacher",
+  operator: "/operator",
+} as const;
 
+export default function Home() {
   return (
     <div className="flex flex-1 items-center justify-center bg-zinc-50 px-6 py-24 dark:bg-black">
       <main className="w-full max-w-2xl">
@@ -23,45 +36,115 @@ export default function Home() {
           Session, and the transcript is assessed against that Standard.
         </p>
 
-        <section className="mt-10 border-t border-zinc-200 pt-6 dark:border-zinc-800">
-          <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">
-            Backend
-          </h2>
-          {readiness === undefined ? (
-            <p className="mt-3 text-sm text-zinc-500">Connecting to Convex…</p>
-          ) : (
-            <dl className="mt-3 grid grid-cols-1 gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
-              <Row
-                label="Convex"
-                value="connected"
-              />
-              <Row
-                label="Deployment configured"
-                value={readiness.seeded ? "yes" : "not seeded"}
-              />
-              <Row
-                label="Assignments"
-                value={String(readiness.assignmentCount)}
-              />
-              <Row
-                label="Published versions"
-                value={String(readiness.publishedVersionCount)}
-              />
-              <Row label="Release mode" value={readiness.releaseMode} />
-            </dl>
-          )}
-          {readiness !== undefined && !readiness.seeded && (
-            <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
-              This deployment has no configuration row. Run{" "}
-              <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-                npm run seed
-              </code>
-              .
-            </p>
-          )}
-        </section>
+        <AuthLoading>
+          <p className="mt-10 text-sm text-zinc-500">Checking your session…</p>
+        </AuthLoading>
+
+        <Unauthenticated>
+          <SignedOut />
+        </Unauthenticated>
+
+        <Authenticated>
+          <SignedIn />
+        </Authenticated>
       </main>
     </div>
+  );
+}
+
+function SignedOut() {
+  const readiness = useQuery(api.deployment.readiness);
+
+  return (
+    <>
+      <p className="mt-10">
+        <Link
+          href="/login"
+          className="inline-block rounded bg-black px-4 py-2 text-sm font-medium text-white dark:bg-zinc-50 dark:text-black"
+        >
+          Sign in
+        </Link>
+      </p>
+      <p className="mt-3 text-sm text-zinc-500">
+        Accounts are provisioned by hand. There is no sign-up.
+      </p>
+
+      <section className="mt-10 border-t border-zinc-200 pt-6 dark:border-zinc-800">
+        <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">
+          Backend
+        </h2>
+        {readiness === undefined ? (
+          <p className="mt-3 text-sm text-zinc-500">Connecting to Convex…</p>
+        ) : (
+          <dl className="mt-3 grid grid-cols-1 gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
+            <Row label="Convex" value="connected" />
+            <Row
+              label="Deployment configured"
+              value={readiness.seeded ? "yes" : "not seeded"}
+            />
+            <Row label="Assignments" value={String(readiness.assignmentCount)} />
+            <Row
+              label="Published versions"
+              value={String(readiness.publishedVersionCount)}
+            />
+            <Row label="Release mode" value={readiness.releaseMode} />
+          </dl>
+        )}
+        {readiness !== undefined && !readiness.seeded && (
+          <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
+            This deployment has no configuration row. Run{" "}
+            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
+              npm run seed
+            </code>
+            .
+          </p>
+        )}
+      </section>
+    </>
+  );
+}
+
+function SignedIn() {
+  const { logout } = usePrivy();
+  const me = useQuery(api.users.me);
+
+  return (
+    <section className="mt-10 border-t border-zinc-200 pt-6 dark:border-zinc-800">
+      {me === undefined ? (
+        <p className="text-sm text-zinc-500">Resolving your account…</p>
+      ) : me === null ? (
+        <>
+          <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">
+            Not provisioned
+          </h2>
+          <p className="mt-3 max-w-lg text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+            You are signed in, but this deployment has no account for you. Viva
+            accounts are provisioned by hand; ask your Teacher to have yours
+            provisioned, then sign in again.
+          </p>
+        </>
+      ) : (
+        <>
+          <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500">
+            Signed in
+          </h2>
+          <dl className="mt-3 grid grid-cols-1 gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
+            <Row label="Name" value={me.displayName} />
+            <Row label="Role" value={me.role} />
+          </dl>
+          <p className="mt-4 max-w-lg text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+            {`Your home is ${HOME_ROUTE[me.role]}, which is not built yet.`}
+          </p>
+        </>
+      )}
+      <button
+        type="button"
+        onClick={() => void logout()}
+        className="mt-6 rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-800 dark:border-zinc-700 dark:text-zinc-200"
+      >
+        Sign out
+      </button>
+    </section>
   );
 }
 
