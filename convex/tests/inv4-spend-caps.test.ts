@@ -21,7 +21,7 @@
 
 import { describe, expect, test } from "vitest";
 import { api, internal } from "../_generated/api";
-import type { Doc } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import schema from "../schema";
 import {
   convexModules,
@@ -68,6 +68,34 @@ async function tally(t: Awaited<ReturnType<typeof seedWorld>>["t"]) {
   }));
 }
 
+/**
+ * Mint as the Student, and turn "the gate let this through" into a sentence
+ * that says so.
+ *
+ * A mint that survives the INV-4 gate goes on to ask OpenAI for a client
+ * secret, and there is no API key in this suite — by design, since the whole
+ * point is that a refusal costs nothing. Left alone, a broken gate would
+ * therefore fail these tests with "OPENAI_API_KEY is not set", which tells a
+ * reader of a red CI run nothing about which guarantee is at risk.
+ */
+async function attemptMint(
+  t: Awaited<ReturnType<typeof seedWorld>>["t"],
+  assignmentId: Id<"assignments">,
+) {
+  try {
+    return await t
+      .withIdentity({ subject: STUDENT_DID })
+      .action(api.sessions.mintSession, { assignmentId });
+  } catch (error) {
+    throw new Error(
+      `${INV4}: this mint was not refused — it ran past the cap and breaker ` +
+        "gate and got as far as buying a Realtime client secret, which is " +
+        "real money and, here, a missing key. Underlying error: " +
+        (error instanceof Error ? error.message : String(error)),
+    );
+  }
+}
+
 function expectFriendly(message: string, invariant: string): void {
   expect(
     message.length,
@@ -104,9 +132,7 @@ describe("INV-4 — a cap-exceeded mint is refused kindly and creates nothing", 
     });
 
     const before = await tally(t);
-    const result = await t
-      .withIdentity({ subject: STUDENT_DID })
-      .action(api.sessions.mintSession, { assignmentId: ids.assignmentId });
+    const result = await attemptMint(t, ids.assignmentId);
 
     expect(
       result.ok,
@@ -146,9 +172,7 @@ describe("INV-4 — a cap-exceeded mint is refused kindly and creates nothing", 
     });
 
     const before = await tally(t);
-    const result = await t
-      .withIdentity({ subject: STUDENT_DID })
-      .action(api.sessions.mintSession, { assignmentId: ids.assignmentId });
+    const result = await attemptMint(t, ids.assignmentId);
 
     expect(result.ok).toBe(false);
     if (result.ok) {
@@ -186,9 +210,7 @@ describe("INV-4 — the breaker blocks mints only", () => {
     });
 
     const before = await tally(t);
-    const result = await t
-      .withIdentity({ subject: STUDENT_DID })
-      .action(api.sessions.mintSession, { assignmentId: ids.assignmentId });
+    const result = await attemptMint(t, ids.assignmentId);
 
     expect(
       result.ok,
@@ -218,9 +240,7 @@ describe("INV-4 — the breaker blocks mints only", () => {
     });
 
     const student = t.withIdentity({ subject: STUDENT_DID });
-    const refusal = await student.action(api.sessions.mintSession, {
-      assignmentId: ids.assignmentId,
-    });
+    const refusal = await attemptMint(t, ids.assignmentId);
     expect(refusal.ok).toBe(false);
 
     const live = await t.run(
@@ -383,9 +403,7 @@ describe("INV-4 — a Session under the floor does not burn an attempt", () => {
         startedAt: Date.now(),
       });
     });
-    const result = await t
-      .withIdentity({ subject: STUDENT_DID })
-      .action(api.sessions.mintSession, { assignmentId: ids.assignmentId });
+    const result = await attemptMint(t, ids.assignmentId);
     expect(result.ok).toBe(false);
   });
 });
@@ -414,9 +432,7 @@ describe("INV-4 — all model spend counts against the monthly budget", () => {
           usd: 1000,
         });
       });
-      const result = await t
-        .withIdentity({ subject: STUDENT_DID })
-        .action(api.sessions.mintSession, { assignmentId: ids.assignmentId });
+      const result = await attemptMint(t, ids.assignmentId);
       expect(
         result.ok,
         `${INV4} edge (c) BROKEN: "${kind}" spend does not count against the ` +
@@ -437,9 +453,7 @@ describe("INV-4 — all model spend counts against the monthly budget", () => {
       sessionId: ids.sessionId,
       usd: 200,
     });
-    const result = await t
-      .withIdentity({ subject: STUDENT_DID })
-      .action(api.sessions.mintSession, { assignmentId: ids.assignmentId });
+    const result = await attemptMint(t, ids.assignmentId);
     expect(result.ok).toBe(false);
   });
 
