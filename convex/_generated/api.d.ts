@@ -20,6 +20,7 @@ import type * as lib_config from "../lib/config.js";
 import type * as lib_constants from "../lib/constants.js";
 import type * as lib_identity from "../lib/identity.js";
 import type * as lib_time from "../lib/time.js";
+import type * as operator from "../operator.js";
 import type * as seed from "../seed.js";
 import type * as sessions from "../sessions.js";
 import type * as spend from "../spend.js";
@@ -48,6 +49,7 @@ declare const fullApi: ApiFromModules<{
   "lib/constants": typeof lib_constants;
   "lib/identity": typeof lib_identity;
   "lib/time": typeof lib_time;
+  operator: typeof operator;
   seed: typeof seed;
   sessions: typeof sessions;
   spend: typeof spend;
