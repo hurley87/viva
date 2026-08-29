@@ -481,8 +481,8 @@ async function finalizeSession(
   // was minted and never connected: the time-box backstop finalizes it as
   // `disconnected` with a zero duration, and there is nothing whatsoever to
   // evaluate. Creating an Assessment for it would mean either a junk row of
-  // `not_probed` ratings against a Standard the Student never heard a question
-  // from, or a permanently `failed` Assessment on every dropped connection —
+  // `not_probed` ratings against criteria the Student never heard a single
+  // question from, or a permanently `failed` Assessment on every drop —
   // both of which teach a Teacher to ignore the column. So it gets none, and
   // `assessments.retry` is the repair path if a Transcript ever turns up.
   //
@@ -646,8 +646,8 @@ export const forGrader = internalQuery({
     }
     const pinned = await assignmentForVersion(ctx, session.assignmentVersionId);
     return {
-      // The pin itself: the Grader evaluates against the Standard of the
-      // version this Session was examined against, never the latest one.
+      // The pin itself. The post-hoc evaluation is done against the version
+      // this Session was examined against, never the latest one.
       assignmentVersionId: session.assignmentVersionId,
       assignmentTitle: pinned?.title ?? "Assignment",
       assignmentPrompt: pinned?.version.prompt ?? "",
