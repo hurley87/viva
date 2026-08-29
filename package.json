@@ -4,23 +4,36 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:convex": "convex dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest run",
+    "seed": "convex run internal.seed.run"
   },
   "dependencies": {
+    "@openai/agents": "0.17.0",
+    "@privy-io/react-auth": "3.38.0",
+    "convex": "1.45.0",
     "next": "16.3.0",
+    "openai": "7.8.0",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "zod": "4.4.3"
   },
   "devDependencies": {
+    "@convex-dev/eslint-plugin": "4.0.0",
+    "@edge-runtime/vm": "5.0.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "convex-test": "0.0.56",
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "4.1.11"
   }
 }
