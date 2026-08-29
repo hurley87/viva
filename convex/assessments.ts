@@ -1,10 +1,11 @@
 // Assessment reads, the Grader's writes, and the shadow-period release.
 //
-// One Assessment per Session, created `pending` by `sessions.finalize` the
-// instant the Session ends and filled in by the Grader minutes later. This
-// module is the isolate-runtime half of that: `convex/grader/run.ts` is a
-// `"use node"` file and so may contain only actions, which have no `ctx.db`.
-// Every database touch the Grader needs lands here.
+// One Assessment per Session, created `pending` by `sessions.sealSession` once
+// the Session's Transcript write window has closed, and filled in by the Grader
+// minutes later. This module is the isolate-runtime half of that:
+// `convex/grader/run.ts` is a `"use node"` file and so may contain only
+// actions, which have no `ctx.db`. Every database touch the Grader needs lands
+// here.
 //
 // Release (PRD §8). `released` is a property of the Assessment, decided once,
 // at creation, from `deploymentConfig.releaseMode`:
@@ -143,7 +144,7 @@ function projectForTeacher(row: Doc<"assessments">): TeacherAssessment {
 }
 
 // ---------------------------------------------------------------------------
-// Creation and scheduling — called by `sessions.finalize` and by `retry`
+// Creation and scheduling — called by `sessions.sealSession` and by `retry`
 // ---------------------------------------------------------------------------
 
 /**
@@ -157,7 +158,7 @@ function projectForTeacher(row: Doc<"assessments">): TeacherAssessment {
  * finished, and turns a silently-dropped run into a visible `failed` — which is
  * retryable, where an eternal `pending` is not.
  *
- * Shared by the Session-end seam and by {@link retry} so that both paths
+ * Shared by the Session-seal seam and by {@link retry} so that both paths
  * schedule the same pair of jobs and neither can forget the sweep.
  */
 export async function createPendingAssessment(
@@ -176,19 +177,30 @@ export async function createPendingAssessment(
   return assessmentId;
 }
 
-/** Schedule the Grader run and its stall sweep. */
+/**
+ * Schedule the Grader run and its stall sweep.
+ *
+ * The run is given an identity — `graderRunAt`, the instant it was scheduled —
+ * and the sweep carries the same number. Without it the sweep is scoped to the
+ * Assessment rather than to the run, and the sequence "run fails, Teacher
+ * retries, the *first* run's sweep comes due" marks the Teacher's fresh run
+ * `failed` seconds after it started, for a stall that belonged to a run that is
+ * already over.
+ */
 export async function scheduleGrader(
   ctx: MutationCtx,
   sessionId: Id<"sessions">,
   assessmentId: Id<"assessments">,
 ): Promise<void> {
+  const graderRunAt = Date.now();
+  await ctx.db.patch("assessments", assessmentId, { graderRunAt });
   await ctx.scheduler.runAfter(0, internal.grader.run.gradeSession, {
     sessionId,
   });
   await ctx.scheduler.runAfter(
     GRADER_STALL_SEC * MS_PER_SEC,
     internal.assessments.failIfStillPending,
-    { assessmentId },
+    { assessmentId, graderRunAt },
   );
 }
 
@@ -201,9 +213,9 @@ export async function scheduleGrader(
  * filling in, what state it is in, and the pinned Assignment version whose
  * Standard it will be evaluated against.
  *
- * Returns `null` when the Session has no Assessment at all — the Session-end
- * seam deliberately creates none for a Session with no Transcript, and the
- * Grader must not conjure one.
+ * Returns `null` when the Session has no Assessment at all — the seal seam
+ * deliberately creates none for a Session with no Transcript, and the Grader
+ * must not conjure one.
  */
 export const forGraderRun = internalQuery({
   args: { sessionId: v.id("sessions") },
@@ -279,13 +291,22 @@ export const recordFailed = internalMutation({
  * The stall sweep. Scheduled alongside every Grader run as an exactly-once
  * mutation, so a Grader action that was dropped rather than executed still ends
  * up somewhere a human can see and retry from.
+ *
+ * Scoped to one run, not to the Assessment: it acts only while `graderRunAt`
+ * still names the run it was scheduled for. A sweep left over from a run that
+ * has since been retried is about a stall that is already resolved, and marking
+ * the retry `failed` on its account would be a lie a Teacher then has to chase.
  */
 export const failIfStillPending = internalMutation({
-  args: { assessmentId: v.id("assessments") },
+  args: { assessmentId: v.id("assessments"), graderRunAt: v.number() },
   returns: v.boolean(),
   handler: async (ctx, args): Promise<boolean> => {
     const assessment = await ctx.db.get("assessments", args.assessmentId);
     if (assessment === null || assessment.status !== "pending") {
+      return false;
+    }
+    if (assessment.graderRunAt !== args.graderRunAt) {
+      // A newer run owns this Assessment; its own sweep is the one that counts.
       return false;
     }
     console.error(
@@ -363,12 +384,18 @@ export const release = mutation({
  * Also the repair path for the rare Session that ended with no Transcript rows
  * and therefore no Assessment, and for one whose Transcript landed late: it
  * creates the row if none exists, with `released` decided from the deployment's
- * current release mode exactly as the Session-end seam would have.
+ * current release mode exactly as the seal seam would have.
  *
  * @throws when the caller is not a Teacher, when the Session does not exist,
- * when it has not ended, or when its Assessment is already `complete` — a
- * complete Assessment is not re-run, because a second opinion that silently
- * replaces the first is not a second opinion.
+ * when it has not ended, when its Assessment is already `complete` — a complete
+ * Assessment is not re-run, because a second opinion that silently replaces the
+ * first is not a second opinion — or when a Grader run is still in flight. A
+ * second run against a `pending` Assessment is two models grading one Session:
+ * two `grader` spendEvents against the budget (INV-4 edge (c)) and two
+ * `recordComplete` writes of which the last one wins, so the Assessment a
+ * Teacher reads need not be the one whose spend they see. A run that never
+ * returns is not stuck forever — the stall sweep turns it into a `failed` this
+ * same mutation will happily retry.
  */
 export const retry = mutation({
   args: { sessionId: v.id("sessions") },
@@ -402,6 +429,13 @@ export const retry = mutation({
     if (existing.status === "complete") {
       throw new Error(
         "That Assessment is already complete; there is nothing to retry.",
+      );
+    }
+    if (existing.status === "pending") {
+      throw new Error(
+        "A Grader run for that Session is already in flight. It will be " +
+          `marked failed if it has not returned within ${GRADER_STALL_SEC} ` +
+          "seconds of being scheduled, and can be retried then.",
       );
     }
     await ctx.db.patch("assessments", existing._id, { status: "pending" });
