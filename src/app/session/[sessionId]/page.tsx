@@ -27,7 +27,13 @@ import {
   type RealtimeItem,
 } from "@openai/agents/realtime";
 import type { OpenAIRealtimeWebRTC } from "@openai/agents/realtime";
-import { useMutation, useQuery } from "convex/react";
+import {
+  Authenticated,
+  AuthLoading,
+  Unauthenticated,
+  useMutation,
+  useQuery,
+} from "convex/react";
 import Link from "next/link";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { z } from "zod";
@@ -114,7 +120,31 @@ export default function SessionPage({
   params,
 }: PageProps<"/session/[sessionId]">) {
   const { sessionId } = use(params);
-  return <LiveSession sessionId={sessionId as Id<"sessions">} />;
+  return (
+    <>
+      <AuthLoading>
+        <Shell>Checking your session…</Shell>
+      </AuthLoading>
+      <Unauthenticated>
+        <Shell>
+          <h1 className="text-2xl font-semibold text-black dark:text-zinc-50">
+            Sign in to take a Session
+          </h1>
+          <p className="mt-8">
+            <Link
+              href="/login"
+              className="inline-block rounded bg-black px-4 py-2 text-sm font-medium text-white dark:bg-zinc-50 dark:text-black"
+            >
+              Sign in
+            </Link>
+          </p>
+        </Shell>
+      </Unauthenticated>
+      <Authenticated>
+        <LiveSession sessionId={sessionId as Id<"sessions">} />
+      </Authenticated>
+    </>
+  );
 }
 
 function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
@@ -269,6 +299,10 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
         setEndsAt(Date.now() + (started.endsAt - started.startedAt));
         setPhase("live");
       } catch (error: unknown) {
+        // Claim the ending first: closing the transport emits a
+        // `connection_change` that would otherwise route this through the
+        // ordinary end path and replace the explanation below.
+        endingRef.current = true;
         realtime.close();
         setFailure(
           error instanceof Error
@@ -280,7 +314,6 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
         // never ran is under the forgiveness floor, so this hands the Student
         // their attempt straight back instead of making them wait for the
         // server's backstop.
-        endingRef.current = true;
         void endSession({ sessionId, reason: "disconnected" }).catch(() => {});
       }
     }
