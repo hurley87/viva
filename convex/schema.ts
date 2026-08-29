@@ -100,9 +100,24 @@ export default defineSchema({
     ),
     openaiCallId: v.optional(v.string()),
     countsAgainstCaps: v.optional(v.boolean()), // set at end: duration >= floor
-  })
-    .index("by_student", ["studentId"])
-    .index("by_student_ended", ["studentId", "endedAt"]), // cap-window queries
+    /**
+     * True when `startedAt` was established by the server rather than reported
+     * by the browser: the client persisted Transcript material for a Session it
+     * never called `sessions.start` for. INV-4 depends on a Session's duration,
+     * and a duration that only exists when a client volunteers it is not a cap.
+     * See `adoptUnreportedStart` in convex/sessions.ts.
+     */
+    startInferred: v.optional(v.boolean()),
+    /**
+     * The shape of the Transcript, frozen onto the Session once its write
+     * window has closed (`internal.sessions.sealSession`). Counts of turns, not
+     * content: this is what lets the Operator's aggregates report Transcript
+     * volume and the ASR error rate without reading a single Transcript row
+     * (INV-2), and without a query whose cost grows with every turn ever spoken.
+     */
+    transcriptItemCount: v.optional(v.number()),
+    transcriptFailedAsrCount: v.optional(v.number()),
+  }).index("by_student", ["studentId"]),
 
   // -------------------------------------------------------------------------
   // Transcript: sole Session record (ADR-0001). Upserted incrementally from
@@ -159,6 +174,13 @@ export default defineSchema({
       ),
     ),
     graderModel: v.optional(v.string()), // pinned OpenAI model id used
+    /**
+     * When the Grader run this row is currently waiting on was scheduled. It is
+     * the run's identity: the stall sweep carries the same number and refuses to
+     * act unless it still matches, so a sweep left over from an earlier run
+     * cannot mark a retry `failed` seconds after a Teacher started it.
+     */
+    graderRunAt: v.optional(v.number()),
     released: v.boolean(),
     releasedAt: v.optional(v.number()),
   }).index("by_session", ["sessionId"]),
@@ -179,6 +201,13 @@ export default defineSchema({
   // The breaker sums the current calendar month at mint time; it blocks NEW
   // mints only, never a live Session. Values are estimates recorded at
   // Session end / Grader call.
+  //
+  // No declared index, and deliberately so: every read of this table is a range
+  // over one calendar month, which Convex's built-in `by_creation_time` index
+  // serves directly. Rows are never pruned, so the alternative — the full-table
+  // scan this table used to get — grows without bound and eventually crosses
+  // the per-transaction read ceiling *inside the mint path*, turning the
+  // friendly cap refusal into a hard failure. See convex/spend.ts.
   // -------------------------------------------------------------------------
   spendEvents: defineTable({
     kind: v.union(v.literal("realtime"), v.literal("grader")),
