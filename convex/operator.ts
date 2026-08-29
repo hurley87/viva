@@ -37,9 +37,9 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
-import { getDeploymentConfig } from "./lib/config";
+import { getDeploymentConfigOrNull } from "./lib/config";
 import { requireOperator, requireTeacher, requireUser } from "./lib/identity";
-import { breakerBlocksNewMints, monthToDateSpendUsd } from "./spend";
+import { monthToDateSpendEvents, sumUsd } from "./spend";
 
 // ---------------------------------------------------------------------------
 // Aggregates
@@ -55,6 +55,15 @@ import { breakerBlocksNewMints, monthToDateSpendUsd } from "./spend";
  * in it.
  */
 const metricsValidator = v.object({
+  deployment: v.object({
+    /**
+     * Whether this deployment has its `deploymentConfig` singleton. False means
+     * the caps, the breaker ceiling and the time-box do not exist yet and no
+     * Session can be minted at all. The Operator's dashboard is the surface
+     * that has to be able to *say* that, so it reports rather than throws.
+     */
+    seeded: v.boolean(),
+  }),
   sessions: v.object({
     total: v.number(),
     minted: v.number(),
@@ -72,10 +81,21 @@ const metricsValidator = v.object({
     voided: v.number(),
   }),
   transcript: v.object({
-    /** Rows, not words. A count of turns says nothing about what was said. */
+    /**
+     * Rows, not words. A count of turns says nothing about what was said.
+     *
+     * Summed from the counts frozen onto each Session when its Transcript's
+     * write window closed (`internal.sessions.sealSession`), never by reading
+     * `transcriptItems`. That table grows by roughly one row per conversation
+     * turn — tens per Session — so scanning it here would put the Operator's
+     * only observability surface over Convex's per-transaction read ceiling
+     * after a few hundred Sessions, exactly when it is most needed.
+     */
     items: v.number(),
     /** Turns whose ASR never returned. An error rate, not content. */
     failedAsrItems: v.number(),
+    /** Sessions ended before the counts existed, so not in the two above. */
+    sessionsWithoutCounts: v.number(),
   }),
   assessments: v.object({
     total: v.number(),
@@ -92,6 +112,13 @@ const metricsValidator = v.object({
     /** flaggedAssessments / complete, in [0, 1]. Zero when none are complete. */
     flagRate: v.number(),
   }),
+  /**
+   * Every figure here is scoped to the current calendar month (UTC), which is
+   * the window the breaker itself sums. A lifetime total next to a monthly
+   * budget reads as a breakdown of that budget and is not one: month two of a
+   * deployment would show `realtimeUsd` far above `monthToDateUsd`, apparently
+   * blowing a budget the breaker simultaneously reports as untripped.
+   */
   spend: v.object({
     monthToDateUsd: v.number(),
     monthlyBudgetUsd: v.number(),
@@ -107,6 +134,7 @@ const metricsValidator = v.object({
 });
 
 export type OperatorMetrics = {
+  deployment: { seeded: boolean };
   sessions: {
     total: number;
     minted: number;
@@ -119,7 +147,11 @@ export type OperatorMetrics = {
     endedByDisconnect: number;
   };
   students: { active: number; voided: number };
-  transcript: { items: number; failedAsrItems: number };
+  transcript: {
+    items: number;
+    failedAsrItems: number;
+    sessionsWithoutCounts: number;
+  };
   assessments: {
     total: number;
     pending: number;
@@ -146,9 +178,21 @@ function count<T>(rows: readonly T[], predicate: (row: T) => boolean): number {
  * Deployment-wide aggregates for the Operator: volume, spend, INV-1 flag rates,
  * and the counts that stand in for error logs.
  *
- * Full-table scans, deliberately. The MVP is one course; an aggregate over a
- * few hundred rows is cheaper to compute than to denormalize, and a counter
- * that drifts from the rows it counts is worse than a slow query.
+ * Full-table scans of the tables that grow with the number of *Sessions* —
+ * `sessions`, `users`, `assessments`, `transcriptShares`. The MVP is one
+ * course; an aggregate over a few thousand rows is cheaper to compute than to
+ * denormalize, and a counter that drifts from the rows it counts is worse than
+ * a slow query. `transcriptItems` is deliberately not among them: it grows with
+ * every conversation turn, tens per Session, and this query would fall over
+ * long before the others. Its two numbers come from the per-Session counts
+ * frozen at seal time, which cannot drift because the Transcript they count is
+ * closed. `spendEvents` is read for the current month only, through the same
+ * bounded read the breaker uses.
+ *
+ * Does not throw on an unseeded deployment. This is the Operator's only
+ * observability surface, and "this deployment was never seeded" is precisely
+ * the kind of thing it exists to show; it enforces nothing, so it has nothing
+ * to fail closed about.
  *
  * @throws when the caller is not an Operator.
  */
@@ -157,14 +201,13 @@ export const metrics = query({
   returns: metricsValidator,
   handler: async (ctx): Promise<OperatorMetrics> => {
     await requireOperator(ctx);
-    const config = await getDeploymentConfig(ctx);
+    const config = await getDeploymentConfigOrNull(ctx);
     const now = Date.now();
 
     const sessions = await ctx.db.query("sessions").collect();
     const users = await ctx.db.query("users").collect();
-    const items = await ctx.db.query("transcriptItems").collect();
     const assessments = await ctx.db.query("assessments").collect();
-    const spendEvents = await ctx.db.query("spendEvents").collect();
+    const spendEvents = await monthToDateSpendEvents(ctx, now);
     const shares = await ctx.db.query("transcriptShares").collect();
 
     const students = users.filter((user) => user.role === "student");
@@ -176,13 +219,16 @@ export const metrics = query({
     );
 
     const usdFor = (kind: Doc<"spendEvents">["kind"]): number =>
-      spendEvents
-        .filter((event) => event.kind === kind)
-        .reduce((total, event) => total + event.usd, 0);
+      sumUsd(spendEvents.filter((event) => event.kind === kind));
 
-    const breaker = await breakerBlocksNewMints(ctx, config, now);
+    // One read of one month of spend, summed three ways. The breaker's own
+    // decision is re-derived here from the same rows rather than by asking the
+    // breaker, which would read the table again.
+    const monthToDateUsd = sumUsd(spendEvents);
+    const monthlyBudgetUsd = config?.monthlyBudgetUsd ?? 0;
 
     return {
+      deployment: { seeded: config !== null },
       sessions: {
         total: sessions.length,
         minted: count(sessions, (s) => s.status === "minted"),
@@ -208,8 +254,20 @@ export const metrics = query({
         voided: count(students, (s) => s.status === "voided"),
       },
       transcript: {
-        items: items.length,
-        failedAsrItems: count(items, (item) => item.textStatus === "failed"),
+        items: sessions.reduce(
+          (total, session) => total + (session.transcriptItemCount ?? 0),
+          0,
+        ),
+        failedAsrItems: sessions.reduce(
+          (total, session) => total + (session.transcriptFailedAsrCount ?? 0),
+          0,
+        ),
+        sessionsWithoutCounts: count(
+          sessions,
+          (session) =>
+            session.status === "ended" &&
+            session.transcriptItemCount === undefined,
+        ),
       },
       assessments: {
         total: assessments.length,
@@ -224,11 +282,14 @@ export const metrics = query({
         flagRate: complete.length === 0 ? 0 : flagged.length / complete.length,
       },
       spend: {
-        monthToDateUsd: await monthToDateSpendUsd(ctx, now),
-        monthlyBudgetUsd: config.monthlyBudgetUsd,
+        monthToDateUsd,
+        monthlyBudgetUsd,
         realtimeUsd: usdFor("realtime"),
         graderUsd: usdFor("grader"),
-        breakerBlocksNewMints: breaker.tripped,
+        // Unseeded: the breaker is not what is stopping mints — the missing
+        // configuration is, and `deployment.seeded` is where that is said.
+        breakerBlocksNewMints:
+          config !== null && monthToDateUsd >= config.monthlyBudgetUsd,
       },
       breakGlass: { grantedShares: shares.length },
     };
