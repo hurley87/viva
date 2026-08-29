@@ -70,3 +70,34 @@ export const GRADER_MODEL = "gpt-5.6-sol";
  * prompt, too short to hoard.
  */
 export const CLIENT_SECRET_TTL_SEC = 120;
+
+/**
+ * How long after the Grader is scheduled an Assessment may sit `pending`
+ * before the deployment gives up on that run and marks it `failed`.
+ *
+ * This exists because of an asymmetry in the Convex scheduler: a scheduled
+ * MUTATION runs exactly once, but a scheduled ACTION runs *at most* once and is
+ * never retried. The Grader is an action (it needs Node and the OpenAI SDK), so
+ * a dropped run would otherwise leave an Assessment `pending` forever with
+ * nothing to notice. The sweep that uses this constant is itself a scheduled
+ * mutation, so it cannot be dropped in turn. Generous: a real Grader run on a
+ * fifteen-minute Transcript is tens of seconds, so this only ever fires on a
+ * run that is genuinely never coming back.
+ */
+export const GRADER_STALL_SEC = 600;
+
+/**
+ * PLACEHOLDER list price of the Grader model, in USD per million tokens, as of
+ * 2026-08 (`.scratch/viva-mvp/issues/04-grader-and-classifier-models.md`:
+ * gpt-5.6-sol at $4/$20 per MTok).
+ *
+ * Unlike the realtime estimate these are multiplied by the token counts OpenAI
+ * actually reports for the call, so the recorded `grader` spend is an
+ * arithmetic result rather than a guess — the only estimate in it is the price.
+ * Update alongside {@link GRADER_MODEL}; the cost-model ticket
+ * (`.scratch/viva-mvp/issues/08-cost-model.md`) validates both.
+ */
+export const GRADER_USD_PER_INPUT_MTOK = 4;
+
+/** @see GRADER_USD_PER_INPUT_MTOK */
+export const GRADER_USD_PER_OUTPUT_MTOK = 20;

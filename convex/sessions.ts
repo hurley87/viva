@@ -19,7 +19,8 @@
 //     time-box job is scheduled from it.
 //   finalize (internal mutation, idempotent)
 //     stamps `endedAt`/`endReason`, applies the forgiveness floor to
-//     `countsAgainstCaps`, and records the realtime spend.
+//     `countsAgainstCaps`, records the realtime spend, and — with no human
+//     action — opens the pending Assessment and schedules the Grader.
 //   enforceTimebox (internal action, convex/examiner/realtime.ts)
 //     the enforcement path: hang the call up and finalize. The client
 //     countdown is UX; this is what actually stops a Session at the box.
@@ -36,6 +37,7 @@ import {
   query,
 } from "./_generated/server";
 import { assignmentForVersion, highestPublishedVersion } from "./assignments";
+import { createPendingAssessment } from "./assessments";
 import { buildExaminerInstructions } from "./examiner/instructions";
 import { getDeploymentConfig } from "./lib/config";
 import { CONNECT_GRACE_SEC } from "./lib/constants";
@@ -471,24 +473,28 @@ async function finalizeSession(
     usd: realtimeSpendUsd(ranForSec),
   });
 
-  // ---------------------------------------------------------------------
-  // TICKET #5 SEAM — grading.
-  // The Assessment row and the Grader schedule belong here, at the end of
-  // this function, where the Session is known to have just transitioned to
-  // `ended` (the `alreadyEnded` branch above returns before this point, so
-  // nothing here can run twice for one Session):
+  // Grading. The Session just transitioned to `ended` — the `alreadyEnded`
+  // branch above returns before this point — so this runs exactly once per
+  // Session, with no human action anywhere in the path.
   //
-  //   const assessmentId = await ctx.db.insert("assessments", {
-  //     sessionId: session._id,
-  //     status: "pending",
-  //     released: config.releaseMode === "auto",
-  //   });
-  //   await ctx.scheduler.runAfter(0, internal.grader.run.gradeSession, {
-  //     sessionId: session._id,
-  //   });
+  // Except for a Session with no Transcript at all. That is the Session that
+  // was minted and never connected: the time-box backstop finalizes it as
+  // `disconnected` with a zero duration, and there is nothing whatsoever to
+  // evaluate. Creating an Assessment for it would mean either a junk row of
+  // `not_probed` ratings against a Standard the Student never heard a question
+  // from, or a permanently `failed` Assessment on every dropped connection —
+  // both of which teach a Teacher to ignore the column. So it gets none, and
+  // `assessments.retry` is the repair path if a Transcript ever turns up.
   //
-  // Ticket #5 owns both lines. `config` is already read above.
-  // ---------------------------------------------------------------------
+  // `first()` on the ordered index is one indexed read; this is the end of a
+  // Session, not a hot path.
+  const anyTranscript = await ctx.db
+    .query("transcriptItems")
+    .withIndex("by_session_order", (q) => q.eq("sessionId", session._id))
+    .first();
+  if (anyTranscript !== null) {
+    await createPendingAssessment(ctx, session._id, config.releaseMode);
+  }
 
   return {
     alreadyEnded: false,
@@ -601,7 +607,58 @@ export const timeboxState = internalQuery({
 });
 
 // ---------------------------------------------------------------------------
-// 5. Student-scoped reads
+// 5. Grader-facing read
+// ---------------------------------------------------------------------------
+
+type GraderSessionContext = {
+  assignmentVersionId: Id<"assignmentVersions">;
+  assignmentTitle: string;
+  assignmentPrompt: string;
+  status: Doc<"sessions">["status"];
+  endedAt: number | null;
+};
+
+/**
+ * The Session context the post-hoc Grader needs: which Assignment the Student
+ * was answering, and whether the Session is actually over.
+ *
+ * Internal, and read-only. The Grader runs after the fact, in a different
+ * model with a different context; nothing it can call from here touches a live
+ * Session, and this query holds no reference to the Grader-only island that
+ * stores what a competent response must demonstrate (INV-3).
+ */
+export const forGrader = internalQuery({
+  args: { sessionId: v.id("sessions") },
+  returns: v.union(
+    v.null(),
+    v.object({
+      assignmentVersionId: v.id("assignmentVersions"),
+      assignmentTitle: v.string(),
+      assignmentPrompt: v.string(),
+      status: sessionStatus,
+      endedAt: v.union(v.number(), v.null()),
+    }),
+  ),
+  handler: async (ctx, args): Promise<GraderSessionContext | null> => {
+    const session = await ctx.db.get("sessions", args.sessionId);
+    if (session === null) {
+      return null;
+    }
+    const pinned = await assignmentForVersion(ctx, session.assignmentVersionId);
+    return {
+      // The pin itself: the Grader evaluates against the Standard of the
+      // version this Session was examined against, never the latest one.
+      assignmentVersionId: session.assignmentVersionId,
+      assignmentTitle: pinned?.title ?? "Assignment",
+      assignmentPrompt: pinned?.version.prompt ?? "",
+      status: session.status,
+      endedAt: session.endedAt ?? null,
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// 6. Student-scoped reads
 // ---------------------------------------------------------------------------
 
 const studentSessionValidator = v.object({

@@ -21,7 +21,11 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation } from "./_generated/server";
 import type { DeploymentConfig } from "./lib/config";
-import { REALTIME_USD_PER_MINUTE } from "./lib/constants";
+import {
+  GRADER_USD_PER_INPUT_MTOK,
+  GRADER_USD_PER_OUTPUT_MTOK,
+  REALTIME_USD_PER_MINUTE,
+} from "./lib/constants";
 import {
   DAY_WINDOW_MS,
   WEEK_WINDOW_MS,
@@ -173,4 +177,25 @@ export async function sessionCapCounts(
  */
 export function realtimeSpendUsd(durationInSec: number): number {
   return (durationInSec / 60) * REALTIME_USD_PER_MINUTE;
+}
+
+const TOKENS_PER_MTOK = 1_000_000;
+
+/**
+ * Estimated Grader spend for one call, from the token counts OpenAI reported
+ * for it.
+ *
+ * All model spend counts against the INV-4 budget (PRD §4 edge (c)), and the
+ * Grader is model spend: one call per Session, a few cents against the dollars
+ * of realtime audio, but it is counted rather than waved through because "small
+ * enough to ignore" is how a budget stops meaning anything.
+ */
+export function graderSpendUsd(
+  inputTokens: number,
+  outputTokens: number,
+): number {
+  return (
+    (inputTokens / TOKENS_PER_MTOK) * GRADER_USD_PER_INPUT_MTOK +
+    (outputTokens / TOKENS_PER_MTOK) * GRADER_USD_PER_OUTPUT_MTOK
+  );
 }

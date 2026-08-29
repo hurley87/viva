@@ -8,10 +8,14 @@
  * @module
  */
 
+import type * as assessments from "../assessments.js";
 import type * as assignments from "../assignments.js";
 import type * as deployment from "../deployment.js";
 import type * as examiner_instructions from "../examiner/instructions.js";
 import type * as examiner_realtime from "../examiner/realtime.js";
+import type * as grader_assessmentSchema from "../grader/assessmentSchema.js";
+import type * as grader_prompt from "../grader/prompt.js";
+import type * as grader_run from "../grader/run.js";
 import type * as lib_config from "../lib/config.js";
 import type * as lib_constants from "../lib/constants.js";
 import type * as lib_identity from "../lib/identity.js";
@@ -30,10 +34,14 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  assessments: typeof assessments;
   assignments: typeof assignments;
   deployment: typeof deployment;
   "examiner/instructions": typeof examiner_instructions;
   "examiner/realtime": typeof examiner_realtime;
+  "grader/assessmentSchema": typeof grader_assessmentSchema;
+  "grader/prompt": typeof grader_prompt;
+  "grader/run": typeof grader_run;
   "lib/config": typeof lib_config;
   "lib/constants": typeof lib_constants;
   "lib/identity": typeof lib_identity;
