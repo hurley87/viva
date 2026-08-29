@@ -23,9 +23,16 @@ function useAuthFromPrivy() {
   const fetchAccessToken = useCallback(
     async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
       void forceRefreshToken;
-      return (await getAccessToken()) ?? null;
+      if (!authenticated) {
+        return null;
+      }
+      try {
+        return (await getAccessToken()) ?? null;
+      } catch {
+        return null;
+      }
     },
-    [getAccessToken],
+    [authenticated, getAccessToken],
   );
 
   return useMemo(
@@ -48,6 +55,11 @@ export function ConvexClientProvider({ children }: { children: ReactNode }) {
       appId={privyAppId}
       config={{
         loginMethods: ["email"],
+        appearance: { theme: "dark" },
+        embeddedWallets: {
+          ethereum: { createOnLogin: "off" },
+          solana: { createOnLogin: "off" },
+        },
       }}
     >
       <ConvexProviderWithAuth client={convex} useAuth={useAuthFromPrivy}>

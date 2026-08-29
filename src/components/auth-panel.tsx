@@ -40,7 +40,25 @@ function PrivyAuthPanel() {
     return <EmailOtpForm />;
   }
 
-  if (isConvexAuthLoading || me === undefined) {
+  if (isConvexAuthLoading) {
+    return <p>Connecting to Convex…</p>;
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="flex flex-col gap-3">
+        <p>
+          Your sign-in session is no longer valid. Sign out and request a new
+          email code.
+        </p>
+        <button type="button" className={buttonClassName} onClick={() => void logout()}>
+          Sign out
+        </button>
+      </div>
+    );
+  }
+
+  if (me === undefined) {
     return <p>Connecting to Convex…</p>;
   }
 
