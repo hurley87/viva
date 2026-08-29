@@ -202,12 +202,62 @@ describe("INV-4 — a cap-exceeded mint is refused kindly and creates nothing", 
 // (2) The breaker — mints only, never a live Session
 // ---------------------------------------------------------------------------
 
+/** The deployment's month-to-date spend, summed the way the breaker sums it. */
+async function monthToDateUsd(
+  t: Awaited<ReturnType<typeof seedWorld>>["t"],
+): Promise<number> {
+  return await t.run(async (ctx) =>
+    (await ctx.db.query("spendEvents").collect()).reduce(
+      (total, event) => total + event.usd,
+      0,
+    ),
+  );
+}
+
 describe("INV-4 — the breaker blocks mints only", () => {
-  test("at the monthly budget, a new mint is refused and nothing is created", async () => {
-    const { t, ids } = await seedWorld(modules, { monthlyBudgetUsd: 10 });
-    await t.run(async (ctx) => {
-      await ctx.db.insert("spendEvents", { kind: "realtime", usd: 7 });
+  test("one cent under the budget still mints — the breaker is not simply always on", async () => {
+    const budget = 10;
+    const { t, ids } = await seedWorld(modules, {
+      monthlyBudgetUsd: budget,
+      sessionsPerDay: 5,
     });
+    // Topped up to a cent below the ceiling, computed from what is actually
+    // there. The other half of the `>=` boundary: if this mints and the exact
+    // boundary below refuses, the comparison is `>=` and not `>`.
+    const gap = budget - (await monthToDateUsd(t)) - 0.01;
+    await t.run(async (ctx) => {
+      await ctx.db.insert("spendEvents", { kind: "realtime", usd: gap });
+    });
+    expect(await monthToDateUsd(t)).toBeCloseTo(budget - 0.01, 6);
+
+    const prepared = await t
+      .withIdentity({ subject: STUDENT_DID })
+      .mutation(internal.sessions.prepareMint, {
+        assignmentId: ids.assignmentId,
+      });
+    expect(
+      prepared.ok,
+      `${INV4}: the breaker refused a mint below the monthly budget. A ` +
+        "breaker that trips early is an outage with a friendly message.",
+    ).toBe(true);
+  });
+
+  test("at the monthly budget, a new mint is refused and nothing is created", async () => {
+    const budget = 10;
+    const { t, ids } = await seedWorld(modules, { monthlyBudgetUsd: budget });
+    // Exactly the ceiling, and deliberately computed rather than guessed: the
+    // world seeds spend of its own, so a hardcoded top-up makes this a
+    // strictly-over test the day that seed changes, and the `>=` boundary
+    // stops being covered by anything.
+    const gap = budget - (await monthToDateUsd(t));
+    await t.run(async (ctx) => {
+      await ctx.db.insert("spendEvents", { kind: "realtime", usd: gap });
+    });
+    expect(
+      await monthToDateUsd(t),
+      `${INV4}: this test is the only one exercising the breaker's boundary ` +
+        "rather than an over-budget deployment; it has to sit exactly on it.",
+    ).toBeCloseTo(budget, 6);
 
     const before = await tally(t);
     const result = await attemptMint(t, ids.assignmentId);

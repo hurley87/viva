@@ -202,72 +202,125 @@ export function synthesizeArgs(
   fn: PublicFunction,
   ids: Record<string, string>,
 ): Record<string, unknown> {
+  return synthesizeArgVariants(fn, ids)[0] ?? {};
+}
+
+/**
+ * How many argument combinations one function may contribute to the sweep.
+ *
+ * A cap rather than an exhaustive product: the point is to reach every branch
+ * of every union, not to multiply out a combinatorial explosion if a function
+ * ever grows several union-typed arguments at once.
+ */
+const MAX_VARIANTS = 32;
+
+/**
+ * Every plausible argument object for a function — one per combination of its
+ * unions' branches.
+ *
+ * Synthesizing only the first branch of a union is how a leak hides: given
+ * `args: { detail: v.union(v.literal("counts"), v.literal("full")) }` the sweep
+ * would only ever ask for `"counts"`, and a function that returns Transcript
+ * content under `"full"` would never be called with it. The file's premise is
+ * exhaustive discovery, so the discovery has to be exhaustive.
+ */
+export function synthesizeArgVariants(
+  fn: PublicFunction,
+  ids: Record<string, string>,
+): Record<string, unknown>[] {
   const json = fn.args;
   if (json === null || json.type !== "object") {
-    return {};
+    return [{}];
   }
-  const args: Record<string, unknown> = {};
+  let variants: Record<string, unknown>[] = [{}];
   for (const [field, spec] of Object.entries(json.value)) {
     if (spec.optional) {
       continue;
     }
-    args[field] = synthesizeValue(spec.fieldType, ids, `${fn.path}.${field}`);
+    const values = synthesizeValues(
+      spec.fieldType,
+      ids,
+      `${fn.path}.${field}`,
+    );
+    const grown: Record<string, unknown>[] = [];
+    for (const base of variants) {
+      for (const value of values) {
+        if (grown.length >= MAX_VARIANTS) {
+          break;
+        }
+        grown.push({ ...base, [field]: value });
+      }
+    }
+    variants = grown;
   }
-  return args;
+  return variants.length === 0 ? [{}] : variants;
 }
 
-function synthesizeValue(
+/** Every value a validator admits, one per union branch. */
+function synthesizeValues(
   json: ValidatorJson,
   ids: Record<string, string>,
   where: string,
-): unknown {
+): unknown[] {
   switch (json.type) {
     case "null":
     case "any":
-      return null;
+      return [null];
     case "number":
-      return 0;
+      return [0];
     case "bigint":
-      return BigInt(0);
+      return [BigInt(0)];
     case "boolean":
-      return false;
+      return [false];
     case "string":
-      return "";
+      return [""];
     case "bytes":
-      return new ArrayBuffer(0);
+      return [new ArrayBuffer(0)];
     case "literal":
-      return json.value;
+      return [json.value];
     case "array":
-      return [];
+      return [[]];
     case "record":
-      return {};
+      return [{}];
     case "union":
-      return synthesizeValue(json.value[0], ids, where);
+      return json.value
+        .flatMap((branch) => synthesizeValues(branch, ids, where))
+        .slice(0, MAX_VARIANTS);
     case "object": {
-      const nested: Record<string, unknown> = {};
+      let nested: Record<string, unknown>[] = [{}];
       for (const [field, spec] of Object.entries(json.value)) {
         if (spec.optional) {
           continue;
         }
-        nested[field] = synthesizeValue(
+        const values = synthesizeValues(
           spec.fieldType,
           ids,
           `${where}.${field}`,
         );
+        const grown: Record<string, unknown>[] = [];
+        for (const base of nested) {
+          for (const value of values) {
+            if (grown.length >= MAX_VARIANTS) {
+              break;
+            }
+            grown.push({ ...base, [field]: value });
+          }
+        }
+        nested = grown;
       }
-      return nested;
+      return nested.length === 0 ? [{}] : nested;
     }
     case "id": {
       const id = ids[json.tableName];
       if (id === undefined) {
         throw new Error(
           `The invariant sweep has no seeded id for table "${json.tableName}" ` +
-            `(needed by ${where}). Seed one in convex/tests/world.ts so the ` +
+            `(needed by ${where}). Seed one in test/invariants/world.ts so the ` +
             "sweep calls this function against real data rather than a " +
             "not-found early return.",
         );
       }
-      return id;
+      return [id];
     }
   }
 }

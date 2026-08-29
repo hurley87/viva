@@ -63,7 +63,9 @@ const appSources = import.meta.glob("../../src/**/*.{ts,tsx}", {
  */
 const STANDARDS_TOKEN = /\bstandards\b/;
 
-const STANDARDS_IMPORT = /from\s+"(\.{1,2}\/)+standards"/;
+// Either quoting style: nothing in this repo enforces one, so a gate that
+// assumed double quotes would simply stop seeing new imports.
+const STANDARDS_IMPORT = /from\s+["'](\.{1,2}\/)+standards["']/;
 
 /**
  * The modules allowed to name the Standard at all:

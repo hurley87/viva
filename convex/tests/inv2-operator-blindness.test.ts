@@ -23,7 +23,7 @@ import {
   mutationRef,
   publicFunctions,
   queryRef,
-  synthesizeArgs,
+  synthesizeArgVariants,
   validatorTypes,
 } from "../../test/invariants/publicFunctions";
 import { convexModules, tableWrites } from "../../test/invariants/sources";
@@ -68,6 +68,19 @@ describe("INV-2 — the Operator's surface is aggregates only", () => {
       if (BREAK_GLASS_FUNCTIONS.includes(fn.name)) {
         continue;
       }
+      // First, that there is a declared return type at all. Convex does not
+      // require one, and `validatorTypes(null)` is the empty array — so without
+      // this the three assertions below hold vacuously, and
+      // `export const errorLog = query({ args: {}, handler: () => transcriptText })`
+      // clears the entire gate. A check that passes because it inspected
+      // nothing is worse than no check: it reads as a guarantee.
+      expect(
+        fn.returns,
+        `${INV2}: ${fn.path} declares no return validator. An Operator ` +
+          "function has to say what it returns, because saying so in a type " +
+          "is what makes 'aggregates only' checkable at all.",
+      ).not.toBeNull();
+
       const types = validatorTypes(fn.returns);
       const complaint =
         `${INV2}: ${fn.path} declares a return type containing ` +
@@ -161,25 +174,30 @@ describe("INV-2 — the Operator cannot reach content through any exported funct
     const leaks: string[] = [];
     const called: string[] = [];
     for (const fn of functions) {
-      const args = synthesizeArgs(fn, idsByTable);
-      let serialized: string;
-      try {
-        const result =
-          fn.type === "query"
-            ? await operator.query(queryRef(fn.path), args)
-            : fn.type === "mutation"
-              ? await operator.mutation(mutationRef(fn.path), args)
-              : await operator.action(actionRef(fn.path), args);
-        serialized = JSON.stringify(result ?? null);
-      } catch (error) {
-        // An authorization failure is the expected outcome for most of these,
-        // and it is not a pass on its own — the message is scanned too. A
-        // refusal that quotes what it is refusing has leaked it anyway.
-        serialized = error instanceof Error ? error.message : String(error);
-      }
-      called.push(fn.path);
-      for (const hit of sentinelsIn(serialized)) {
-        leaks.push(`  ${fn.path} (${fn.type}) yielded ${hit}`);
+      // Every combination of every union branch, not just the first one: a
+      // function reachable only through the second branch of a union argument
+      // is a function this sweep would otherwise never call.
+      for (const args of synthesizeArgVariants(fn, idsByTable)) {
+        let serialized: string;
+        try {
+          const result =
+            fn.type === "query"
+              ? await operator.query(queryRef(fn.path), args)
+              : fn.type === "mutation"
+                ? await operator.mutation(mutationRef(fn.path), args)
+                : await operator.action(actionRef(fn.path), args);
+          serialized = JSON.stringify(result ?? null);
+        } catch (error) {
+          // An authorization failure is the expected outcome for most of
+          // these, and it is not a pass on its own — the message is scanned
+          // too. A refusal that quotes what it is refusing has leaked it
+          // anyway.
+          serialized = error instanceof Error ? error.message : String(error);
+        }
+        called.push(`${fn.path}(${JSON.stringify(args)})`);
+        for (const hit of sentinelsIn(serialized)) {
+          leaks.push(`  ${fn.path} (${fn.type}) yielded ${hit}`);
+        }
       }
     }
 
