@@ -20,6 +20,51 @@ export const TIMEBOX_GRACE_SEC = 20;
 export const CONNECT_GRACE_SEC = 120;
 
 /**
+ * How long past the time-box the scheduled server hangup waits before severing
+ * the call.
+ *
+ * The time-box is a hard stop, but the shape the Examiner prompt asks for is a
+ * graceful one: at `[SYSTEM: time is up]` it says one closing sentence and
+ * calls `end_session`. Hanging up at exactly `startedAt + timeboxSec` makes
+ * that closing line unreachable — every expiring Session would end with audio
+ * cut mid-sentence. This grace is the window in which the graceful path can
+ * actually happen; it is deliberately shorter than {@link TIMEBOX_GRACE_SEC},
+ * so the closing turn is still inside the window in which the server accepts
+ * Transcript writes.
+ *
+ * It is not slack in the time-box: the Examiner is told the time is up at the
+ * box, and nothing new may be asked after it.
+ */
+export const TIMEBOX_HANGUP_GRACE_SEC = 15;
+
+/**
+ * How long after the scheduled hangup should have run the exactly-once sweep
+ * checks that it did.
+ *
+ * The hangup is an ACTION (it needs Node and the OpenAI SDK) and a scheduled
+ * action runs *at most* once — a dropped one is simply gone, and the Session
+ * would stay `live` forever: no `endedAt`, no realtime spendEvent, no
+ * Assessment, and counting against that Student's caps for the whole rolling
+ * week. {@link sweepTimebox} is a scheduled MUTATION, which runs exactly once,
+ * so it cannot be dropped in turn. This slack keeps it behind the action on the
+ * happy path, so the normal ending is still the one that hangs the call up.
+ */
+export const TIMEBOX_SWEEP_SLACK_SEC = 60;
+
+/**
+ * How long after a Session ends the deployment waits before freezing the
+ * Transcript and opening the Assessment.
+ *
+ * The server accepts Transcript writes for {@link TIMEBOX_GRACE_SEC} past the
+ * end, precisely so the client's last in-flight flush lands. Reading the
+ * Transcript before that window closes means grading a record that is still
+ * being written — the closing exchange rated `not_probed`, or, for a Session
+ * whose first flush had not landed at all, no Assessment produced. So the seam
+ * that opens the Assessment waits for the window it was given to close.
+ */
+export const SEAL_DELAY_SEC = TIMEBOX_GRACE_SEC + 5;
+
+/**
  * PLACEHOLDER estimate of OpenAI Realtime spend per wall-clock minute of a
  * Session, in USD, counting audio in both directions plus text. Used to write
  * a `realtime` spendEvent at Session end so the INV-4 monthly breaker has

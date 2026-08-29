@@ -25,6 +25,17 @@
 //     (the platform removes the transcript of the unplayed audio). It is
 //     stored `textStatus: "truncated"`, which is the truth about that turn.
 //
+// What the server does NOT know. It has no copy of the conversation, so
+// `itemId`, `speaker`, `text` and `textStatus` are taken on the client's word:
+// the Transcript is authored by the browser and a Student can fabricate one,
+// invented Examiner turns included, which the Grader will then evaluate. That
+// is inherent to holding the WebRTC leg in the browser and storing no audio
+// (ADR-0001, ADR-0003), it is bounded by formative-only stakes (ADR-0002), and
+// it is written down as accepted in
+// docs/adr/0004-client-authored-transcript.md — not left implicit here. What
+// the client does NOT get to decide is the accounting: see
+// `adoptUnreportedStart`.
+//
 // Time-box integrity (PRD §4 INV-4 build note). Every write is checked against
 // a cutoff computed here, on the SERVER clock, from the Session's own
 // timestamps. A frozen, tampered, or replayed client cannot append to a
@@ -39,6 +50,7 @@ import { getDeploymentConfig } from "./lib/config";
 import { CONNECT_GRACE_SEC, TIMEBOX_GRACE_SEC } from "./lib/constants";
 import { requireStudent } from "./lib/identity";
 import { writeCutoffAt } from "./lib/time";
+import { adoptUnreportedStart } from "./sessions";
 
 const MS_PER_SEC = 1000;
 
@@ -145,10 +157,12 @@ async function requireOwnSession(
  * It is the earlier of two things, plus {@link TIMEBOX_GRACE_SEC} of slack for
  * the one write that was already in flight when the Session stopped:
  *
- *   - the time-box: `startedAt + timeboxSec`. A Session that never connected
- *     has no `startedAt`, so it uses the same mint-relative deadline the
- *     enforcement job uses (`mintedAt + timeboxSec + CONNECT_GRACE_SEC`) —
- *     past that point no client is going to turn up.
+ *   - the time-box: `startedAt + timeboxSec`. Every Session that has produced
+ *     material has a `startedAt`, because the first write starts it (see
+ *     `adoptUnreportedStart`); the mint-relative deadline
+ *     (`mintedAt + timeboxSec + CONNECT_GRACE_SEC`) remains as the fallback for
+ *     a Session that ended without ever having one, past which no client is
+ *     going to turn up.
  *   - the actual end: a Session that ended early — the Student hung up, the
  *     Examiner closed it — accepts nothing past `endedAt`.
  *
@@ -301,8 +315,16 @@ export const upsert = mutation({
   },
   returns: upsertResultValidator,
   handler: async (ctx, args): Promise<UpsertResult> => {
-    const session = await requireOwnSession(ctx, args.sessionId);
+    const owned = await requireOwnSession(ctx, args.sessionId);
     const config = await getDeploymentConfig(ctx);
+
+    // A Transcript write is server-side proof that the call is up. A Session
+    // still `minted` at this point belongs to a client that connected and never
+    // called `sessions.start` — which, before this, meant a Session with no
+    // `startedAt`: zero duration, forgiven by the caps, and a $0 realtime
+    // spendEvent for a real examination (INV-4, both halves). The server starts
+    // it here rather than waiting to be told.
+    const session = await adoptUnreportedStart(ctx, owned);
 
     if (Date.now() > writeCutoffFor(session, config.timeboxSec)) {
       return {

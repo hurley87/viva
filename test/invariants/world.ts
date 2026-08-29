@@ -212,6 +212,14 @@ export async function seedWorld(
       endedAt,
       endReason: "student_hangup",
       countsAgainstCaps: true,
+      // The two Transcript rows below, counted. `internal.sessions.sealSession`
+      // freezes these onto every real Session once its write window closes, and
+      // the Operator's aggregates are summed from them rather than from a scan
+      // of `transcriptItems` (which grows per conversation turn). A fixture
+      // that omitted them would quietly under-report and make the INV-2
+      // aggregate test assert nothing.
+      transcriptItemCount: 2,
+      transcriptFailedAsrCount: 0,
     });
 
     const transcriptItemId = await ctx.db.insert("transcriptItems", {

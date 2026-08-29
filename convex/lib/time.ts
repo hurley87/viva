@@ -5,7 +5,7 @@
 // The client countdown is UX. Enforcement is: the scheduled hangup job, and
 // the server refusing to accept material past the cutoff (INV-4 build note).
 
-import { TIMEBOX_GRACE_SEC } from "./constants";
+import { TIMEBOX_GRACE_SEC, TIMEBOX_HANGUP_GRACE_SEC } from "./constants";
 
 const MS_PER_SEC = 1000;
 const MS_PER_MINUTE = 60 * MS_PER_SEC;
@@ -32,9 +32,27 @@ export function timeboxCutoffAt(
 }
 
 /**
+ * The instant the server severs the call: the cutoff plus
+ * {@link TIMEBOX_HANGUP_GRACE_SEC}.
+ *
+ * The time-box is the cutoff; this is when the server stops waiting for the
+ * Examiner to close things gracefully and hangs up regardless. Returns `null`
+ * for a Session that never started, exactly as {@link timeboxCutoffAt} does.
+ */
+export function timeboxHangupAt(
+  startedAt: number | undefined,
+  timeboxSec: number,
+): number | null {
+  const cutoff = timeboxCutoffAt(startedAt, timeboxSec);
+  return cutoff === null ? null : cutoff + TIMEBOX_HANGUP_GRACE_SEC * MS_PER_SEC;
+}
+
+/**
  * The last instant the server will accept material for a Session: the cutoff
  * plus {@link TIMEBOX_GRACE_SEC}, which covers the one in-flight write from a
- * client that was mid-request when the time-box expired.
+ * client that was mid-request when the time-box expired. Deliberately later
+ * than {@link timeboxHangupAt}, so the Examiner's closing turn is still
+ * persistable.
  */
 export function writeCutoffAt(
   startedAt: number | undefined,

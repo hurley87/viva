@@ -17,13 +17,28 @@
 //     the browser reports the WebRTC call id once the SDP exchange resolves.
 //     `startedAt` is stamped here, on the SERVER clock, and the accurate
 //     time-box job is scheduled from it.
+//   adoptUnreportedStart (called from convex/transcript.ts)
+//     the same transition, made without the client's cooperation. A browser
+//     that connects to OpenAI and simply never calls `start` would otherwise
+//     own a Session with no `startedAt` — which is to say a Session of zero
+//     duration, forgiven by the caps and recorded as zero spend, while a real
+//     fifteen-minute examination happened. The first Transcript write is
+//     server-side proof that the call is up, so it starts the Session.
 //   finalize (internal mutation, idempotent)
 //     stamps `endedAt`/`endReason`, applies the forgiveness floor to
-//     `countsAgainstCaps`, records the realtime spend, and — with no human
-//     action — opens the pending Assessment and schedules the Grader.
+//     `countsAgainstCaps`, records the realtime spend, schedules the hangup of
+//     the OpenAI call, and schedules the seal.
+//   sealSession (internal mutation, scheduled SEAL_DELAY_SEC after the end)
+//     runs once the Transcript's write window has closed: freezes the
+//     Transcript's shape onto the Session row and — with no human action —
+//     opens the pending Assessment and schedules the Grader.
 //   enforceTimebox (internal action, convex/examiner/realtime.ts)
 //     the enforcement path: hang the call up and finalize. The client
 //     countdown is UX; this is what actually stops a Session at the box.
+//   sweepTimebox (internal mutation)
+//     the backstop behind that backstop. Scheduled mutations run exactly once
+//     where scheduled actions run at most once, so this is what notices a
+//     dropped `enforceTimebox` instead of leaving a Session `live` forever.
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
@@ -40,12 +55,18 @@ import { assignmentForVersion, highestPublishedVersion } from "./assignments";
 import { createPendingAssessment } from "./assessments";
 import { buildExaminerInstructions } from "./examiner/instructions";
 import { getDeploymentConfig } from "./lib/config";
-import { CONNECT_GRACE_SEC } from "./lib/constants";
+import {
+  CONNECT_GRACE_SEC,
+  SEAL_DELAY_SEC,
+  TIMEBOX_HANGUP_GRACE_SEC,
+  TIMEBOX_SWEEP_SLACK_SEC,
+} from "./lib/constants";
 import { requireStudent } from "./lib/identity";
 import {
   countsAgainstCaps,
   durationSec,
   timeboxCutoffAt,
+  timeboxHangupAt,
 } from "./lib/time";
 import {
   breakerBlocksNewMints,
@@ -205,6 +226,34 @@ async function requireOwnSession(
   return { student, session };
 }
 
+/**
+ * Arm both time-box timers for a Session.
+ *
+ * Two jobs, because they fail differently. `enforceTimebox` is an ACTION: it
+ * can reach OpenAI and hang the call up, which is the enforcement PRD §4's
+ * INV-4 build note describes — but a scheduled action runs *at most* once and
+ * is never retried, so a dropped one is simply gone. `sweepTimebox` is a
+ * MUTATION, which runs exactly once; it cannot hang a call up, but it can
+ * guarantee the Session ends, is accounted for, and stops counting against the
+ * Student's caps. Neither one alone is the guarantee.
+ */
+async function scheduleTimeboxJobs(
+  ctx: MutationCtx,
+  sessionId: Id<"sessions">,
+  when: { hangupInMs: number },
+): Promise<void> {
+  await ctx.scheduler.runAfter(
+    Math.max(0, when.hangupInMs),
+    internal.examiner.realtime.enforceTimebox,
+    { sessionId },
+  );
+  await ctx.scheduler.runAfter(
+    Math.max(0, when.hangupInMs) + TIMEBOX_SWEEP_SLACK_SEC * MS_PER_SEC,
+    internal.sessions.sweepTimebox,
+    { sessionId },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // 1. Mint
 // ---------------------------------------------------------------------------
@@ -288,11 +337,11 @@ export const prepareMint = internalMutation({
     // 4. Schedule the backstop. `sessions.start` schedules the accurate job
     // from the real start; this one exists for the Session that never
     // connects, and no-ops if the accurate job got there first.
-    await ctx.scheduler.runAfter(
-      (config.timeboxSec + CONNECT_GRACE_SEC) * MS_PER_SEC,
-      internal.examiner.realtime.enforceTimebox,
-      { sessionId },
-    );
+    await scheduleTimeboxJobs(ctx, sessionId, {
+      hangupInMs:
+        (config.timeboxSec + CONNECT_GRACE_SEC + TIMEBOX_HANGUP_GRACE_SEC) *
+        MS_PER_SEC,
+    });
 
     return {
       ok: true,
@@ -312,10 +361,13 @@ export const prepareMint = internalMutation({
  * `prepareMint`, handed to the client-secret call, and dropped; what comes
  * back to the browser is an `ek_...` secret (INV-1 mechanism a).
  *
- * If the client-secret call fails the Session row survives as `minted`. That
- * is intentional: the time-box backstop finalizes it with a zero duration,
- * which the forgiveness floor marks as not counting against the caps, so a
- * failed mint costs the Student nothing.
+ * If the client-secret call fails, the Session is ended immediately rather than
+ * left to the time-box backstop. It ends with a zero duration, which the
+ * forgiveness floor marks as not counting against the caps, so a failed mint
+ * costs the Student nothing — but only if it ends now. Left `minted`, it counts
+ * against the day cap until the backstop finalizes it seventeen minutes later,
+ * so an OpenAI outage plus two clicks would tell a Student who did nothing
+ * wrong to come back tomorrow.
  */
 export const mintSession = action({
   args: { assignmentId: v.id("assignments") },
@@ -341,10 +393,21 @@ export const mintSession = action({
     // Crossing into the Node runtime, where the OpenAI SDK lives. This module
     // stays in the isolate because it also holds mutations and queries, and a
     // `"use node"` file may contain only actions.
-    const secret: { clientSecret: string; expiresAt: number } =
-      await ctx.runAction(internal.examiner.realtime.createClientSecret, {
-        instructions: prepared.instructions,
+    let secret: { clientSecret: string; expiresAt: number };
+    try {
+      secret = await ctx.runAction(
+        internal.examiner.realtime.createClientSecret,
+        { instructions: prepared.instructions },
+      );
+    } catch (error) {
+      // The Session exists but will never be connected to. End it now so the
+      // forgiveness floor releases the Student's cap slot immediately.
+      await ctx.runMutation(internal.sessions.finalize, {
+        sessionId: prepared.sessionId,
+        endReason: "disconnected",
       });
+      throw error;
+    }
 
     return {
       ok: true,
@@ -370,16 +433,23 @@ export const mintSession = action({
  * one thing only the client knows, and it is what the scheduled hangup posts
  * to.
  *
- * @throws if the Session is not freshly minted. A second `start` cannot extend
- * a Session by re-stamping its start time.
+ * A Session the server already adopted (see {@link adoptUnreportedStart} —
+ * Transcript material arrived before this call did) accepts the call id and
+ * keeps the start the server established. The reported start is never allowed
+ * to *move* an existing one: that is the whole mechanism by which a client
+ * could lengthen its own time-box.
+ *
+ * @throws if the Session has ended, or is live with a start the client already
+ * reported. A second `start` cannot extend a Session by re-stamping its start
+ * time.
  */
 export const start = mutation({
   args: {
     sessionId: v.id("sessions"),
     // Optional because the SDK can, in principle, complete a connection
     // without surfacing the call id. A Session with no call id still has a
-    // server-stamped start and a scheduled time-box; it just loses the
-    // server-side hangup and is stopped by finalize alone.
+    // server-stamped start, a scheduled time-box and an exactly-once sweep; it
+    // loses only the ability to sever the audio leg from our side.
     openaiCallId: v.optional(v.string()),
   },
   returns: v.object({
@@ -387,42 +457,117 @@ export const start = mutation({
     endsAt: v.number(),
     timeboxSec: v.number(),
     warningAtSec: v.number(),
+    /**
+     * How long past `endsAt` the server waits before hanging the call up. The
+     * window in which the Examiner's closing line can actually be spoken — the
+     * page's own hangup must sit inside it, not at `endsAt`.
+     */
+    hangupGraceSec: v.number(),
   }),
   handler: async (ctx, args) => {
     const { session } = await requireOwnSession(ctx, args.sessionId);
+    const config = await getDeploymentConfig(ctx);
+
+    // The Session the server already started for itself. Adopt the call id —
+    // it is the one fact only the browser has — and leave the start alone.
+    if (session.status === "live" && session.startInferred === true) {
+      await ctx.db.patch("sessions", session._id, {
+        startInferred: false,
+        ...(args.openaiCallId === undefined
+          ? {}
+          : { openaiCallId: args.openaiCallId }),
+      });
+      const adoptedStart = session.startedAt ?? session._creationTime;
+      return {
+        startedAt: adoptedStart,
+        endsAt: adoptedStart + config.timeboxSec * MS_PER_SEC,
+        timeboxSec: config.timeboxSec,
+        warningAtSec: config.warningAtSec,
+        hangupGraceSec: TIMEBOX_HANGUP_GRACE_SEC,
+      };
+    }
+
     if (session.status !== "minted") {
       throw new Error(
         `This Session is already ${session.status}; it cannot be started again.`,
       );
     }
-    const config = await getDeploymentConfig(ctx);
     const startedAt = Date.now();
 
     await ctx.db.patch("sessions", session._id, {
       status: "live",
       startedAt,
+      startInferred: false,
       ...(args.openaiCallId === undefined
         ? {}
         : { openaiCallId: args.openaiCallId }),
     });
 
-    // The accurate time-box job, scheduled from the real start. The mint-time
+    // The accurate time-box jobs, scheduled from the real start. The mint-time
     // backstop is left in place: it is idempotent, and it checks the cutoff
     // before acting, so a late-connecting Session is not cut short by it.
-    await ctx.scheduler.runAfter(
-      config.timeboxSec * MS_PER_SEC,
-      internal.examiner.realtime.enforceTimebox,
-      { sessionId: session._id },
-    );
+    await scheduleTimeboxJobs(ctx, session._id, {
+      hangupInMs: (config.timeboxSec + TIMEBOX_HANGUP_GRACE_SEC) * MS_PER_SEC,
+    });
 
     return {
       startedAt,
       endsAt: startedAt + config.timeboxSec * MS_PER_SEC,
       timeboxSec: config.timeboxSec,
       warningAtSec: config.warningAtSec,
+      hangupGraceSec: TIMEBOX_HANGUP_GRACE_SEC,
     };
   },
 });
+
+/**
+ * Start a Session the client never reported.
+ *
+ * INV-4 is enforced from a Session's duration, and until this existed a
+ * duration only came into being when the browser volunteered one. A client that
+ * took its `ek_` secret, connected to OpenAI itself, ran a full examination and
+ * simply skipped `sessions.start` produced a Session with no `startedAt` — so
+ * `durationSec` was zero, the forgiveness floor marked it as not counting
+ * against the caps, and the `realtime` spendEvent written at the end was $0. A
+ * complete, graded Session, free, invisible to both the caps and the breaker,
+ * repeatable without limit. The caps were only ever enforced against clients
+ * that chose to be counted.
+ *
+ * Persisted Transcript material is server-side proof that the call is up, so
+ * the first such write starts the Session. The start it stamps is the Session's
+ * own `_creationTime`: the mint is a server-stamped fact the client cannot
+ * touch, the client secret expires a short, fixed time after it (see
+ * CLIENT_SECRET_TTL_SEC) so the connection cannot have begun much later, and
+ * erring early is the safe direction — it can only over-state the duration,
+ * never hide it.
+ *
+ * A Session with no Transcript at all is untouched, and stays forgiven: INV-4
+ * edge (a) is about the Student who lost their connection, and nothing here may
+ * start punishing them.
+ */
+export async function adoptUnreportedStart(
+  ctx: MutationCtx,
+  session: Doc<"sessions">,
+): Promise<Doc<"sessions">> {
+  if (session.status !== "minted") {
+    return session;
+  }
+  const startedAt = session._creationTime;
+  console.warn(
+    `Session ${session._id} persisted Transcript material without ever ` +
+      "calling sessions.start. Starting it from its mint time so it is " +
+      "time-boxed, counted against the Student's caps, and accounted for.",
+  );
+  await ctx.db.patch("sessions", session._id, {
+    status: "live",
+    startedAt,
+    startInferred: true,
+  });
+  // No new timers: the mint-time backstop and its sweep are already armed, and
+  // they both compute the cutoff from the Session's own timestamps rather than
+  // from whichever timer fired.
+  return { ...session, status: "live", startedAt, startInferred: true };
+}
 
 // ---------------------------------------------------------------------------
 // 3. Finalize
@@ -455,7 +600,23 @@ async function finalizeSession(
   }
 
   const endedAt = Date.now();
-  const ranForSec = durationSec(session.startedAt, endedAt);
+
+  // INV-4, belt to `adoptUnreportedStart`'s braces. A Session that produced a
+  // Transcript demonstrably ran, whatever the client did or did not report, and
+  // a Session that ran for an unknown length must not be recorded as one that
+  // ran for no time at all. `startedAt` comes from the client's `start`; the
+  // mint is a server-stamped fact that does not.
+  //
+  // `first()` on the ordered index is one indexed read; this is the end of a
+  // Session, not a hot path.
+  const anyTranscript = await ctx.db
+    .query("transcriptItems")
+    .withIndex("by_session_order", (q) => q.eq("sessionId", session._id))
+    .first();
+  const startedAt =
+    session.startedAt ??
+    (anyTranscript === null ? undefined : session._creationTime);
+  const ranForSec = durationSec(startedAt, endedAt);
   const counts = countsAgainstCaps(ranForSec, config.minDurationSec);
 
   await ctx.db.patch("sessions", session._id, {
@@ -463,6 +624,9 @@ async function finalizeSession(
     endedAt,
     endReason,
     countsAgainstCaps: counts,
+    ...(session.startedAt === undefined && startedAt !== undefined
+      ? { startedAt, startInferred: true }
+      : {}),
   });
 
   // INV-4 edge (c): all model spend counts. Written in the same transaction
@@ -473,28 +637,31 @@ async function finalizeSession(
     usd: realtimeSpendUsd(ranForSec),
   });
 
-  // Grading. The Session just transitioned to `ended` — the `alreadyEnded`
-  // branch above returns before this point — so this runs exactly once per
-  // Session, with no human action anywhere in the path.
-  //
-  // Except for a Session with no Transcript at all. That is the Session that
-  // was minted and never connected: the time-box backstop finalizes it as
-  // `disconnected` with a zero duration, and there is nothing whatsoever to
-  // evaluate. Creating an Assessment for it would mean either a junk row of
-  // `not_probed` ratings against criteria the Student never heard a single
-  // question from, or a permanently `failed` Assessment on every drop —
-  // both of which teach a Teacher to ignore the column. So it gets none, and
-  // `assessments.retry` is the repair path if a Transcript ever turns up.
-  //
-  // `first()` on the ordered index is one indexed read; this is the end of a
-  // Session, not a hot path.
-  const anyTranscript = await ctx.db
-    .query("transcriptItems")
-    .withIndex("by_session_order", (q) => q.eq("sessionId", session._id))
-    .first();
-  if (anyTranscript !== null) {
-    await createPendingAssessment(ctx, session._id, config.releaseMode);
+  // Ending a Session must end the CALL. Finalizing alone never did: it writes
+  // rows, and the audio leg lives at OpenAI. Without this, a Student who
+  // pressed "End Session" at 2:00 left a browser holding an open WebRTC leg
+  // with an Examiner still talking to it — up to OpenAI's own 60-minute
+  // platform cap, entirely unrecorded (Transcript writes stop with the write
+  // window), ungraded, un-audited for INV-1, and unbilled against the breaker.
+  // A mutation cannot reach OpenAI, so this is scheduled; the time-box path
+  // also hangs up inline before it gets here, and a second hangup on an
+  // already-ended call is a 404 the action treats as the success it is.
+  if (session.openaiCallId !== undefined) {
+    await ctx.scheduler.runAfter(0, internal.examiner.realtime.hangupCall, {
+      sessionId: session._id,
+      openaiCallId: session.openaiCallId,
+    });
   }
+
+  // Grading, once the Transcript is finished being written. Deliberately not
+  // here: the server accepts Transcript writes for TIMEBOX_GRACE_SEC past the
+  // end, so reading the Transcript in this transaction reads a record that is
+  // still arriving. See `sealSession`.
+  await ctx.scheduler.runAfter(
+    SEAL_DELAY_SEC * MS_PER_SEC,
+    internal.sessions.sealSession,
+    { sessionId: session._id },
+  );
 
   return {
     alreadyEnded: false,
@@ -543,7 +710,154 @@ export const end = mutation({
 });
 
 // ---------------------------------------------------------------------------
-// 4. Time-box state (read by the enforcement action)
+// 4. Seal — what happens once the Transcript's write window has closed
+// ---------------------------------------------------------------------------
+
+/**
+ * Freeze the Transcript's shape onto the Session, and open its Assessment.
+ *
+ * Scheduled by {@link finalizeSession} for {@link SEAL_DELAY_SEC} after the
+ * end, which is past the point where the server still accepts Transcript
+ * writes. That delay is the fix for two contradictions the lifecycle used to
+ * hold at once:
+ *
+ *   - the Grader was scheduled at `runAfter(0)` while Transcript writes stayed
+ *     legal for another twenty seconds, so a Session cut off at the time-box
+ *     was graded from a record missing its closing exchange — rated
+ *     `not_probed` for material that was spoken and persisted;
+ *   - a short Session whose first debounced flush had not landed yet looked
+ *     like a Session with no Transcript, and got no Assessment at all, needing
+ *     a Teacher to notice and retry by hand.
+ *
+ * A Session with no Transcript when the window closes really did produce
+ * nothing — that is the Session that was minted and never connected — and it
+ * deliberately gets no Assessment. An Assessment made from nothing is either a
+ * junk row of `not_probed` ratings against criteria the Student never heard a
+ * question from, or a permanently `failed` row on every dropped connection;
+ * both teach a Teacher to ignore the column. `assessments.retry` is the repair
+ * path if a Transcript ever turns up.
+ *
+ * Idempotent: scheduled mutations run exactly once, but a Session may also be
+ * sealed by a retry path, and re-sealing must not open a second Assessment.
+ */
+export const sealSession = internalMutation({
+  args: { sessionId: v.id("sessions") },
+  returns: v.object({
+    items: v.number(),
+    failedAsrItems: v.number(),
+    openedAssessment: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
+    const session = await ctx.db.get("sessions", args.sessionId);
+    if (session === null) {
+      return { items: 0, failedAsrItems: 0, openedAssessment: false };
+    }
+    const rows = await ctx.db
+      .query("transcriptItems")
+      .withIndex("by_session_order", (q) => q.eq("sessionId", args.sessionId))
+      .collect();
+    const failedAsrItems = rows.filter(
+      (row) => row.textStatus === "failed",
+    ).length;
+
+    // Counts, not content. This is what lets the Operator's aggregates report
+    // Transcript volume and the ASR error rate (INV-2 permits both: they are
+    // an error rate, not a word anybody said) without a query whose cost grows
+    // with every turn ever spoken in the deployment.
+    if (
+      session.transcriptItemCount !== rows.length ||
+      session.transcriptFailedAsrCount !== failedAsrItems
+    ) {
+      await ctx.db.patch("sessions", args.sessionId, {
+        transcriptItemCount: rows.length,
+        transcriptFailedAsrCount: failedAsrItems,
+      });
+    }
+
+    if (rows.length === 0) {
+      return { items: 0, failedAsrItems: 0, openedAssessment: false };
+    }
+    const existing = await ctx.db
+      .query("assessments")
+      .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
+      .unique();
+    if (existing !== null) {
+      return { items: rows.length, failedAsrItems, openedAssessment: false };
+    }
+    const config = await getDeploymentConfig(ctx);
+    await createPendingAssessment(ctx, args.sessionId, config.releaseMode);
+    return { items: rows.length, failedAsrItems, openedAssessment: true };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// 5. The exactly-once time-box sweep
+// ---------------------------------------------------------------------------
+
+/** How far ahead the sweep will re-arm itself, so a corrupt timestamp cannot
+ * park a job in the far future. */
+const MAX_SWEEP_REARM_MS = 60 * 60 * MS_PER_SEC;
+
+/**
+ * Make sure a Session that is past its time-box has actually ended.
+ *
+ * `enforceTimebox` is the enforcement path and this is not trying to replace
+ * it: an action can reach OpenAI and sever the call, and a mutation cannot. But
+ * a scheduled action runs *at most* once and is never retried, so a dropped or
+ * throwing `enforceTimebox` leaves the Session `live` forever — no `endedAt`,
+ * no realtime spendEvent, no Assessment, and counting against that Student's
+ * caps for the entire rolling week, with nothing anywhere to notice. Scheduled
+ * mutations run exactly once. This is the one that cannot be dropped.
+ *
+ * The codebase already draws exactly this distinction for the Grader, whose
+ * at-most-once action is backed by the exactly-once `failIfStillPending` sweep;
+ * a Session is worth the same treatment.
+ */
+export const sweepTimebox = internalMutation({
+  args: { sessionId: v.id("sessions") },
+  returns: v.union(v.null(), finalizeResultValidator),
+  handler: async (ctx, args): Promise<FinalizeResult | null> => {
+    const session = await ctx.db.get("sessions", args.sessionId);
+    if (session === null || session.status === "ended") {
+      return null;
+    }
+    const config = await getDeploymentConfig(ctx);
+    const hangupAt =
+      timeboxHangupAt(session.startedAt, config.timeboxSec) ??
+      session._creationTime +
+        (config.timeboxSec + CONNECT_GRACE_SEC + TIMEBOX_HANGUP_GRACE_SEC) *
+          MS_PER_SEC;
+    const dueAt = hangupAt + TIMEBOX_SWEEP_SLACK_SEC * MS_PER_SEC;
+    const now = Date.now();
+
+    if (now < dueAt) {
+      // Arrived early — the mint-time sweep for a Session that connected late.
+      // Ending it here would cut a Student short, so it re-arms at the real
+      // deadline instead.
+      const wait = dueAt - now;
+      if (wait <= MAX_SWEEP_REARM_MS) {
+        await ctx.scheduler.runAfter(wait, internal.sessions.sweepTimebox, {
+          sessionId: args.sessionId,
+        });
+      }
+      return null;
+    }
+
+    console.error(
+      `Session ${args.sessionId} was still ${session.status} past its ` +
+        "time-box: the scheduled hangup action never ran. Ending it from the " +
+        "exactly-once sweep.",
+    );
+    return await finalizeSession(
+      ctx,
+      session,
+      session.status === "live" ? "timebox" : "disconnected",
+    );
+  },
+});
+
+// ---------------------------------------------------------------------------
+// 6. Time-box state (read by the enforcement action)
 // ---------------------------------------------------------------------------
 
 type TimeboxState = {
@@ -551,20 +865,26 @@ type TimeboxState = {
   startedAt: number | null;
   openaiCallId: string | null;
   cutoffAt: number;
+  hangupAt: number;
   dueNow: boolean;
-  msUntilCutoff: number;
+  msUntilHangup: number;
 };
 
 /**
  * What the time-box job needs in order to decide whether to act.
  *
- * `cutoffAt` is computed here, on the server clock, from the Session's own
+ * Both instants are computed here, on the server clock, from the Session's own
  * timestamps — never from which timer happened to fire:
  *
- *   - a live Session is due at `startedAt + timeboxSec`;
- *   - a Session that never connected is due at
+ *   - `cutoffAt` is the time-box itself: a live Session is over at
+ *     `startedAt + timeboxSec`; a Session that never connected is over at
  *     `mintedAt + timeboxSec + CONNECT_GRACE_SEC`, the point past which no
  *     client is going to turn up.
+ *   - `hangupAt` is `cutoffAt` plus {@link TIMEBOX_HANGUP_GRACE_SEC}: the
+ *     instant the server stops waiting for the Examiner to say its closing
+ *     line and severs the call. Hanging up at `cutoffAt` exactly made the
+ *     graceful ending the Examiner prompt describes unreachable — every
+ *     expiring Session ended mid-sentence.
  *
  * That is what makes both scheduled jobs safe to fire. The mint-time backstop
  * runs at a fixed offset from the mint, so for a Session that connected late
@@ -580,8 +900,9 @@ export const timeboxState = internalQuery({
       startedAt: v.union(v.number(), v.null()),
       openaiCallId: v.union(v.string(), v.null()),
       cutoffAt: v.number(),
+      hangupAt: v.number(),
       dueNow: v.boolean(),
-      msUntilCutoff: v.number(),
+      msUntilHangup: v.number(),
     }),
   ),
   handler: async (ctx, args): Promise<TimeboxState | null> => {
@@ -594,20 +915,24 @@ export const timeboxState = internalQuery({
       timeboxCutoffAt(session.startedAt, config.timeboxSec) ??
       session._creationTime +
         (config.timeboxSec + CONNECT_GRACE_SEC) * MS_PER_SEC;
+    const hangupAt =
+      timeboxHangupAt(session.startedAt, config.timeboxSec) ??
+      cutoffAt + TIMEBOX_HANGUP_GRACE_SEC * MS_PER_SEC;
     const now = Date.now();
     return {
       status: session.status,
       startedAt: session.startedAt ?? null,
       openaiCallId: session.openaiCallId ?? null,
       cutoffAt,
-      dueNow: now >= cutoffAt,
-      msUntilCutoff: cutoffAt - now,
+      hangupAt,
+      dueNow: now >= hangupAt,
+      msUntilHangup: hangupAt - now,
     };
   },
 });
 
 // ---------------------------------------------------------------------------
-// 5. Grader-facing read
+// 7. Grader-facing read
 // ---------------------------------------------------------------------------
 
 type GraderSessionContext = {
@@ -658,7 +983,7 @@ export const forGrader = internalQuery({
 });
 
 // ---------------------------------------------------------------------------
-// 6. Student-scoped reads
+// 8. Student-scoped reads
 // ---------------------------------------------------------------------------
 
 const studentSessionValidator = v.object({
@@ -743,6 +1068,12 @@ export const getForStudent = query({
     timeboxSec: v.number(),
     warningAtSec: v.number(),
     minDurationSec: v.number(),
+    /**
+     * How long past the time-box the server waits before hanging the call up.
+     * The page's own hangup has to sit inside this window, not at the box: the
+     * Examiner's closing line is spoken in it.
+     */
+    hangupGraceSec: v.number(),
   }),
   handler: async (ctx, args) => {
     const { session } = await requireOwnSession(ctx, args.sessionId);
@@ -754,6 +1085,7 @@ export const getForStudent = query({
       timeboxSec: config.timeboxSec,
       warningAtSec: config.warningAtSec,
       minDurationSec: config.minDurationSec,
+      hangupGraceSec: TIMEBOX_HANGUP_GRACE_SEC,
     };
   },
 });
