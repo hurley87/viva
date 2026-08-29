@@ -15,6 +15,12 @@ import { useEffect, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import { stashClientSecret } from "../../lib/sessionHandoff";
+import {
+  describeSession,
+  FEEDBACK_STATE_LABEL,
+  formatWhen,
+  type FeedbackState,
+} from "../../lib/sessionText";
 
 export default function StudentPage() {
   return (
@@ -75,6 +81,10 @@ function StudentDashboard({ displayName }: { displayName: string }) {
   const router = useRouter();
   const assignments = useQuery(api.assignments.listForStudent);
   const sessions = useQuery(api.sessions.mine);
+  // Where each past Session's feedback has got to. The state is decided on the
+  // server (convex/student.ts) so this list and the Session's own page cannot
+  // disagree about whether feedback is ready.
+  const feedbackStates = useQuery(api.student.feedbackStates);
   const mintSession = useAction(api.sessions.mintSession);
 
   const [minting, setMinting] = useState<Id<"assignments"> | null>(null);
@@ -195,19 +205,22 @@ function StudentDashboard({ displayName }: { displayName: string }) {
         ) : (
           <ul className="mt-3 divide-y divide-zinc-200 border-y border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
             {sessions.map((session) => (
-              <li
-                key={session._id}
-                className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 py-3 text-sm"
-              >
-                <span className="text-zinc-900 dark:text-zinc-100">
-                  {session.assignmentTitle}
-                </span>
-                <span className="text-zinc-500 tabular-nums">
-                  {formatWhen(session.createdAt)}
-                </span>
-                <span className="w-full text-xs text-zinc-500">
-                  {describeSession(session)}
-                </span>
+              <li key={session._id}>
+                <Link
+                  href={`/student/sessions/${session._id}`}
+                  className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 py-3 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900"
+                >
+                  <span className="text-zinc-900 dark:text-zinc-100">
+                    {session.assignmentTitle}
+                  </span>
+                  <span className="text-zinc-500 tabular-nums">
+                    {formatWhen(session.createdAt)}
+                  </span>
+                  <span className="w-full text-xs text-zinc-500">
+                    {describeSession(session)}
+                    {feedbackLabel(feedbackStates, session._id)}
+                  </span>
+                </Link>
               </li>
             ))}
           </ul>
@@ -236,41 +249,19 @@ function Notice({
   );
 }
 
-function formatWhen(timestamp: number): string {
-  return new Date(timestamp).toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
-const END_REASON_TEXT = {
-  student_hangup: "you ended it",
-  timebox: "time ran out",
-  examiner_ended: "the Examiner ended it",
-  disconnected: "the connection dropped",
-} as const;
-
-function describeSession(session: {
-  status: "minted" | "live" | "ended";
-  durationSec: number | null;
-  endReason: keyof typeof END_REASON_TEXT | null;
-  countsAgainstCaps: boolean | null;
-}): string {
-  if (session.status === "minted") {
-    return "Not started.";
+/**
+ * Where this Session's feedback has got to, appended to the row. Silent while
+ * the states are still loading, and for a Session that has not ended — the row
+ * already says it is in progress.
+ */
+function feedbackLabel(
+  states: { sessionId: Id<"sessions">; state: FeedbackState }[] | undefined,
+  sessionId: Id<"sessions">,
+): string {
+  const state = states?.find((row) => row.sessionId === sessionId)?.state;
+  if (state === undefined) {
+    return "";
   }
-  if (session.status === "live") {
-    return "In progress.";
-  }
-  const parts: string[] = [];
-  if (session.durationSec !== null) {
-    parts.push(`Ran ${Math.round(session.durationSec / 60)} min`);
-  }
-  if (session.endReason !== null) {
-    parts.push(END_REASON_TEXT[session.endReason]);
-  }
-  if (session.countsAgainstCaps === false) {
-    parts.push("too short to count against your limit");
-  }
-  return `${parts.join(" — ")}.`;
+  const label = FEEDBACK_STATE_LABEL[state];
+  return label === null ? "" : ` ${label}.`;
 }
