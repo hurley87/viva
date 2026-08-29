@@ -18,7 +18,6 @@
 
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
 import { internalMutation } from "./_generated/server";
 
 // ---------------------------------------------------------------------------
@@ -218,13 +217,15 @@ export const run = internalMutation({
 
     // Standard --------------------------------------------------------------
     // INV-3: written through convex/standards.ts, never touched directly here.
-    const standard: { standardId: Id<"standards">; created: boolean } =
-      await ctx.runMutation(internal.standards.createStandardForVersion,
-        {
-          assignmentVersionId: version._id,
-          criteria: SEED_STANDARD_CRITERIA,
-        },
-      );
+    // Annotated to break the `internal` inference cycle, and deliberately
+    // narrow: this module never handles a Standard id or its content.
+    const standard: { created: boolean } = await ctx.runMutation(
+      internal.standards.createStandardForVersion,
+      {
+        assignmentVersionId: version._id,
+        criteria: SEED_STANDARD_CRITERIA,
+      },
+    );
 
     return {
       deploymentConfig: configState,
