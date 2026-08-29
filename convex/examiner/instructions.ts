@@ -4,8 +4,16 @@
 // are never constructed on, or handed to, the client. The assembled string
 // goes straight into the short-lived OpenAI Realtime client secret minted by
 // convex/examiner/realtime.ts; the browser receives an `ek_...` secret, not
-// this text. The browser's own `RealtimeAgent` carries no instructions at all,
-// so its `session.update` cannot overwrite what was baked in here.
+// this text. That much is enforced here.
+//
+// What is NOT enforced here, stated plainly because the comment this replaced
+// claimed otherwise: our own `RealtimeAgent` carries no instructions, so its
+// `session.update` leaves these standing — but that is a property of the client
+// we ship, not of the platform. The same `ek_` secret authorises a
+// `session.update` carrying any instructions a hand-rolled client sends, and
+// whether OpenAI refuses one from an ephemeral credential is unverified.
+// INV-1's bar is detection, not prevention: the Grader's post-hoc audit reads
+// what the Examiner actually said. See docs/adr/0005-inv1-instruction-integrity-is-client-side.md.
 //
 // INV-3, PRD §4: `{{ASSIGNMENT_PROMPT}}` is the ONLY substitution. The pinned
 // Assignment prompt is the whole of the Assignment content the Examiner ever
