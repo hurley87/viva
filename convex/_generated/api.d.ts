@@ -19,6 +19,7 @@ import type * as grader_mutations from "../grader/mutations.js";
 import type * as grader_prompt from "../grader/prompt.js";
 import type * as grader_queries from "../grader/queries.js";
 import type * as health from "../health.js";
+import type * as lib_assignmentTitle from "../lib/assignmentTitle.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_caps from "../lib/caps.js";
 import type * as lib_customFunctions from "../lib/customFunctions.js";
@@ -54,6 +55,7 @@ declare const fullApi: ApiFromModules<{
   "grader/prompt": typeof grader_prompt;
   "grader/queries": typeof grader_queries;
   health: typeof health;
+  "lib/assignmentTitle": typeof lib_assignmentTitle;
   "lib/auth": typeof lib_auth;
   "lib/caps": typeof lib_caps;
   "lib/customFunctions": typeof lib_customFunctions;
