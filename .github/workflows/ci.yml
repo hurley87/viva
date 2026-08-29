@@ -15,9 +15,15 @@ name: CI
 
 on:
   push:
+  # A pull request from a fork pushes to the fork, not to this repository, so
+  # `push` alone never runs on one — and a check that cannot run cannot be a
+  # required check for an outside contribution, which is exactly the gap this
+  # workflow exists to close.
+  pull_request:
   workflow_dispatch:
 
-# One run per ref. A push that supersedes an in-flight run cancels it.
+# One run per ref. A push that supersedes an in-flight run cancels it, and the
+# same key de-duplicates the push/pull_request pair for a same-repo branch.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
