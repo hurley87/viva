@@ -11,6 +11,12 @@
 //      rendered as those words. Never a number, a percentage, a count of
 //      "how many established", or anything else that could be averaged —
 //      numbers get averaged and averages become grades.
+//
+// The value formatters are re-exported from `./format`, which is also where the
+// Student's views get them: one Session has one length, and it must not read
+// differently depending on who is looking at it.
+
+export { formatDuration, formatWhen } from "./format";
 
 /** Criterion ratings, exactly as PRD §8 names them. */
 export const RATING_LABEL = {
@@ -56,22 +62,6 @@ export type AssessmentSummary = {
   criterionCount: number;
   inv1FlagCount: number;
 };
-
-export function formatWhen(timestamp: number): string {
-  return new Date(timestamp).toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
-/** Wall-clock length of a Session, as `M:SS`. */
-export function formatDuration(seconds: number | null): string {
-  if (seconds === null) {
-    return "—";
-  }
-  const whole = Math.max(0, Math.round(seconds));
-  return `${Math.floor(whole / 60)}:${(whole % 60).toString().padStart(2, "0")}`;
-}
 
 /** One line describing where a Session got to. */
 export function describeSession(session: {

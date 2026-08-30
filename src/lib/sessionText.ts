@@ -4,6 +4,14 @@
 //
 // Vocabulary is CONTEXT.md's: Session, Transcript, Assessment, Examiner,
 // Grader. Never "grade", "score", "result", or "attempt".
+//
+// The value formatters are re-exported from `./format` rather than written
+// here: a Session's length must read the same to the Student and to the
+// Teacher, and it did not when there were two of them.
+
+import { formatDuration } from "./format";
+
+export { formatDuration, formatWhen } from "./format";
 
 /** A Session's `endReason`, as the Student's own account of what happened. */
 export const END_REASON_TEXT = {
@@ -37,19 +45,6 @@ export const FEEDBACK_STATE_LABEL: Record<FeedbackState, string | null> = {
   released: "Feedback ready",
 };
 
-export function formatWhen(timestamp: number): string {
-  return new Date(timestamp).toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
-/** Whole minutes, rounded. A Session is scheduled in minutes, not seconds. */
-export function formatDuration(totalSec: number): string {
-  const minutes = Math.round(totalSec / 60);
-  return minutes === 1 ? "1 minute" : `${minutes} minutes`;
-}
-
 export type SessionShape = {
   status: "minted" | "live" | "ended";
   durationSec: number | null;
@@ -67,7 +62,7 @@ export function describeSession(session: SessionShape): string {
   }
   const parts: string[] = [];
   if (session.durationSec !== null) {
-    parts.push(`Ran ${formatDuration(session.durationSec)}`);
+    parts.push(`Ran for ${formatDuration(session.durationSec)}`);
   }
   if (session.endReason !== null) {
     parts.push(END_REASON_TEXT[session.endReason]);
