@@ -56,11 +56,17 @@ import {
 const CLOSING_AUDIO_MS = 2_000;
 
 /**
- * How far past the time-box this page waits for the Examiner to close things
- * gracefully before hanging up itself. The server's own hangup is the
- * enforcement path; this only spares the Student a few seconds of silence.
+ * How far ahead of the server's own hangup this page hangs up.
+ *
+ * The server severs the call at `startedAt + timeboxSec + hangupGraceSec`, and
+ * that grace is the window in which the Examiner hears `[SYSTEM: time is up]`,
+ * says one closing sentence and calls `end_session`. So this page has to wait
+ * out almost all of it: hanging up at the time-box itself would cut off the
+ * very closing line the grace exists for. It hangs up a few seconds early only
+ * so that a Session the Examiner never closes does not leave the Student
+ * listening to silence until the server job runs.
  */
-const CLIENT_HANGUP_GRACE_SEC = 12;
+const CLIENT_HANGUP_LEAD_SEC = 3;
 
 /**
  * How long a change to the Transcript may sit in this tab before it is written
@@ -122,6 +128,29 @@ function examinerCaptions(history: RealtimeItem[]): Caption[] {
   return captions;
 }
 
+/**
+ * `DOMException` names `navigator.mediaDevices.getUserMedia` rejects with. The
+ * Realtime transport acquires the microphone itself and lets that rejection
+ * through untouched, so this is what a Student who blocked the prompt — or has
+ * no working input device — arrives here with.
+ */
+const MICROPHONE_ERROR_NAMES: ReadonlySet<string> = new Set([
+  "NotAllowedError",
+  "NotFoundError",
+  "NotReadableError",
+  "OverconstrainedError",
+  "SecurityError",
+]);
+
+/** Whether a failed connect was the microphone rather than the network. */
+function isMicrophoneFailure(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("name" in error)) {
+    return false;
+  }
+  const { name } = error as { name: unknown };
+  return typeof name === "string" && MICROPHONE_ERROR_NAMES.has(name);
+}
+
 function formatCountdown(remainingMs: number): string {
   const total = Math.max(0, Math.ceil(remainingMs / 1000));
   const minutes = Math.floor(total / 60);
@@ -168,6 +197,7 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
 
   const [phase, setPhase] = useState<Phase>("connecting");
   const [failure, setFailure] = useState<string | null>(null);
+  const [failureIsMicrophone, setFailureIsMicrophone] = useState(false);
   const [captions, setCaptions] = useState<Caption[]>([]);
   const [endsAt, setEndsAt] = useState<number | null>(null);
   const [remainingMs, setRemainingMs] = useState<number | null>(null);
@@ -177,10 +207,20 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
   const realtimeRef = useRef<RealtimeSession | null>(null);
   const bootedRef = useRef(false);
   const endingRef = useRef(false);
+  /** Set once `connect()` has resolved: past that point the call exists. */
+  const connectedRef = useRef(false);
   const finishRef = useRef<
     ((reason: ClientEndReason, closeDelayMs?: number) => void) | null
   >(null);
-  const captionsEndRef = useRef<HTMLDivElement | null>(null);
+  const leaveRef = useRef<(() => void) | null>(null);
+  const unmountTimerRef = useRef<number | null>(null);
+  // The one-shot marks for the timer below. They are refs rather than locals
+  // inside that effect because the effect re-runs whenever the Session doc
+  // changes, and a note that has been sent must stay sent.
+  const warningSentRef = useRef(false);
+  const timeUpSentRef = useRef(false);
+  const hungUpRef = useRef(false);
+  const captionsScrollRef = useRef<HTMLElement | null>(null);
   const recorderRef = useRef<TranscriptRecorder | null>(null);
 
   /**
@@ -215,6 +255,31 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
   useEffect(() => {
     finishRef.current = finish;
   }, [finish]);
+
+  /**
+   * Leave with no screen left to say it on: the tab is closing, or this page
+   * has been navigated away from. The same work as `finish`, minus the state
+   * updates and minus the delay that lets the Examiner's closing sentence
+   * play — there is nobody left to hear it.
+   *
+   * The recorder is deliberately not disposed. Its retry timer outlives this
+   * component and the Convex mutation it holds still works, so a final write
+   * that has to be retried is better off left running (ADR-0001).
+   */
+  const leaveSession = useCallback(() => {
+    if (endingRef.current) {
+      return;
+    }
+    endingRef.current = true;
+    // Best effort, and the reason the debounce exists: everything older than
+    // one second is already in Convex whether or not this write survives.
+    recorderRef.current?.flush();
+    realtimeRef.current?.close();
+    void endSession({ sessionId, reason: "disconnected" }).catch(() => {});
+  }, [endSession, sessionId]);
+  useEffect(() => {
+    leaveRef.current = leaveSession;
+  }, [leaveSession]);
 
   // Connect once. There is deliberately no teardown in this effect's cleanup:
   // React runs effects twice in development, and closing the call on the first
@@ -321,13 +386,26 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
       if (signal === null) {
         return;
       }
-      if (signal.kind === "truncated") {
-        truncatedItemIds.add(signal.itemId);
-      }
-      // The reconciled item follows this event (the SDK re-retrieves it), so
-      // flush what is pending now and again as soon as the snapshot arrives.
+      // Either way the reconciled item follows this event (the SDK re-retrieves
+      // it), so the snapshot that arrives next is written without waiting out
+      // the debounce.
       flushOnNextSnapshot = true;
-      persist(true);
+      if (signal.kind === "truncated") {
+        // The mark is new information and it is correct now: this event is the
+        // only place the interrupted turn is identified.
+        truncatedItemIds.add(signal.itemId);
+        persist(true);
+        return;
+      }
+      // An ASR final. The text in the *current* snapshot is the pre-merge one —
+      // the SDK merges the final into history after this event — so writing now
+      // would record the Student's turn as `text: "", textStatus: "failed"` and
+      // rely on the correction beating the server's write cutoff. Near the
+      // time-box it does not: the failed row is accepted and the corrected one
+      // refused, and the Student's last answer reaches the Grader blank. Record
+      // the turn so it is not lost, and let the merged snapshot be what is
+      // flushed.
+      persist(false);
     });
 
     // Barge-in. The WebRTC transport handles audio itself and generally does
@@ -359,12 +437,23 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
     });
 
     realtime.transport.on("connection_change", (status) => {
-      if (status === "disconnected") {
-        // Includes the server hanging the call up at the time-box. The
-        // Session is already finalized in that case and `finish` is a no-op
-        // on the server side.
-        finishRef.current?.("disconnected", 0);
+      if (status !== "disconnected") {
+        return;
       }
+      if (!connectedRef.current) {
+        // The call never came up: a denied microphone, a refused SDP exchange.
+        // The SDK's own failed-connection cleanup calls `close()`, which emits
+        // this event SYNCHRONOUSLY — a microtask ahead of `connect()`'s
+        // rejection being observed. Ending here would claim the ending first
+        // and leave a Student whose microphone is blocked reading "The Session
+        // has ended" instead of being told to unblock it. `boot`'s catch owns
+        // this case.
+        return;
+      }
+      // Includes the server hanging the call up at the time-box. The Session
+      // is already finalized in that case and `finish` is a no-op on the
+      // server side.
+      finishRef.current?.("disconnected", 0);
     });
 
     async function boot() {
@@ -382,6 +471,10 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
 
       try {
         await realtime.connect({ apiKey: clientSecret });
+        // Past this line the call exists, so a transport drop is an ending
+        // rather than a failure to start. Before it, the `connection_change`
+        // handler above deliberately stands aside.
+        connectedRef.current = true;
         // The call id comes out of the SDP exchange and exists only once
         // `connect` resolves. It is what the scheduled server hangup posts to.
         const transport = realtime.transport as OpenAIRealtimeWebRTC;
@@ -392,9 +485,7 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
         setEndsAt(Date.now() + (started.endsAt - started.startedAt));
         setPhase("live");
       } catch (error: unknown) {
-        // Claim the ending first: closing the transport emits a
-        // `connection_change` that would otherwise route this through the
-        // ordinary end path and replace the explanation below.
+        // Claim the ending, so nothing else overwrites the explanation below.
         endingRef.current = true;
         realtime.close();
         setFailure(
@@ -402,6 +493,7 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
             ? error.message
             : "The Examiner could not be reached.",
         );
+        setFailureIsMicrophone(isMicrophoneFailure(error));
         setPhase("failed");
         // Close the Session out rather than leaving it minted: a Session that
         // never ran is under the forgiveness floor, so this hands the Student
@@ -414,78 +506,151 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
     void boot();
   }, [details, endSession, sessionId, startSession, upsertTranscript]);
 
-  // The countdown, the two-minute warning, and the time-up note. All three are
-  // driven from one timer so they cannot disagree with each other.
+  // The countdown, the two-minute warning, the time-up note and the client-side
+  // hangup. All four are driven from one timer so they cannot disagree.
+  //
+  // The dependencies are the three numbers, not the `details` object they came
+  // out of, and the "already sent" marks are refs rather than locals. Both are
+  // load-bearing: ending a Session patches the session doc, `getForStudent`
+  // pushes a fresh object, and an effect that re-ran on that object would begin
+  // again with nothing sent. Past `warningAtSec` — which is every Session that
+  // runs to its end — the synchronous first tick would then either inject a
+  // second `[SYSTEM: two minutes remaining]` into a Session that is closing, or
+  // call `sendEvent` on a data channel the SDK has already closed, which throws
+  // (`OpenAIRealtimeWebRTC#assertConnected`) and, from inside an effect body,
+  // becomes the "This Session is not available" error page.
+  const timeboxSec = details?.timeboxSec ?? null;
+  const warningAtSec = details?.warningAtSec ?? null;
+  const hangupGraceSec = details?.hangupGraceSec ?? null;
   useEffect(() => {
-    if (endsAt === null || details === undefined) {
+    if (
+      endsAt === null ||
+      timeboxSec === null ||
+      warningAtSec === null ||
+      hangupGraceSec === null
+    ) {
       return;
     }
-    const { timeboxSec, warningAtSec } = details;
-    const startedAt = endsAt - timeboxSec * 1000;
-    let warningSent = false;
-    let timeUpSent = false;
-    let hungUp = false;
+    const endsAtMs = endsAt;
+    const boxSec = timeboxSec;
+    const warnAtSec = warningAtSec;
+    const startedAtMs = endsAtMs - boxSec * 1000;
+    const hangUpAtSec =
+      boxSec + Math.max(0, hangupGraceSec - CLIENT_HANGUP_LEAD_SEC);
+    let timer: number | null = null;
 
     function note(text: string) {
       const realtime = realtimeRef.current;
-      if (realtime === null) {
+      if (realtime === null || endingRef.current) {
         return;
       }
-      // An out-of-band `role: "system"` item — an operator signal, not
-      // Student speech (approved prototype §3). `sendMessage` would file it
-      // as a Student turn, which is why the raw transport event is used.
-      realtime.transport.sendEvent({
-        type: "conversation.item.create",
-        item: {
-          type: "message",
-          role: "system",
-          content: [{ type: "input_text", text }],
-        },
-      });
-      realtime.transport.requestResponse?.();
+      // Only a live data channel takes an event: `sendEvent` throws on a closed
+      // one, and a Session that is already closing has nobody left to act on
+      // the note anyway.
+      if (realtime.transport.status !== "connected") {
+        return;
+      }
+      try {
+        // An out-of-band `role: "system"` item — an operator signal, not
+        // Student speech (approved prototype §3). `sendMessage` would file it
+        // as a Student turn, which is why the raw transport event is used.
+        realtime.transport.sendEvent({
+          type: "conversation.item.create",
+          item: {
+            type: "message",
+            role: "system",
+            content: [{ type: "input_text", text }],
+          },
+        });
+        realtime.transport.requestResponse?.();
+      } catch (error) {
+        // The one throw here that is genuinely expected: `status` is this
+        // app's view of the transport, updated from events, so it can lag the
+        // data channel's own `readyState` by a task — and `sendEvent` throws
+        // on a channel that is no longer open. Swallowing it is right. The
+        // note is advisory (the time-box is enforced by the server, which does
+        // not need this event to have landed), whereas an exception raised on
+        // this timer reaches React and replaces the Session with an error page.
+        console.error("Could not deliver an operator note", error);
+      }
     }
 
     function tick() {
-      const elapsedSec = (Date.now() - startedAt) / 1000;
-      setRemainingMs(endsAt! - Date.now());
-      if (!warningSent && elapsedSec >= warningAtSec) {
-        warningSent = true;
+      const elapsedSec = (Date.now() - startedAtMs) / 1000;
+      setRemainingMs(endsAtMs - Date.now());
+      if (!warningSentRef.current && elapsedSec >= warnAtSec) {
+        warningSentRef.current = true;
         setWarned(true);
         note(SYSTEM_WARNING_NOTE);
       }
-      if (!timeUpSent && elapsedSec >= timeboxSec) {
-        timeUpSent = true;
+      if (!timeUpSentRef.current && elapsedSec >= boxSec) {
+        timeUpSentRef.current = true;
         note(SYSTEM_TIME_UP_NOTE);
       }
-      if (!hungUp && elapsedSec >= timeboxSec + CLIENT_HANGUP_GRACE_SEC) {
-        hungUp = true;
+      if (!hungUpRef.current && elapsedSec >= hangUpAtSec) {
+        hungUpRef.current = true;
         finishRef.current?.("timebox", 0);
+      }
+      // Once the Session is closing there is nothing left for this timer to do,
+      // and the countdown should stop where it stopped rather than run on
+      // behind the ended screen.
+      if (endingRef.current && timer !== null) {
+        window.clearInterval(timer);
+        timer = null;
       }
     }
 
     tick();
-    const timer = window.setInterval(tick, 250);
-    return () => window.clearInterval(timer);
-  }, [endsAt, details]);
+    if (!endingRef.current) {
+      timer = window.setInterval(tick, 250);
+    }
+    return () => {
+      if (timer !== null) {
+        window.clearInterval(timer);
+      }
+    };
+  }, [endsAt, timeboxSec, warningAtSec, hangupGraceSec]);
 
   // A closing tab should not leave a live call behind.
   useEffect(() => {
     function onPageHide() {
-      if (endingRef.current) {
-        return;
-      }
-      // Best effort, and the reason the debounce exists: everything older than
-      // one second is already in Convex whether or not this write survives.
-      recorderRef.current?.flush();
-      realtimeRef.current?.close();
-      void endSession({ sessionId, reason: "disconnected" }).catch(() => {});
+      leaveRef.current?.();
     }
     window.addEventListener("pagehide", onPageHide);
     return () => window.removeEventListener("pagehide", onPageHide);
-  }, [endSession, sessionId]);
+  }, []);
 
+  // Neither should navigating away from it. `pagehide` covers a document being
+  // unloaded, not a Student pressing Back out of a client-side route: without
+  // this, the component unmounts, the countdown stops, and the call carries on
+  // — microphone open, Examiner still speaking into an audio element nothing
+  // is showing — until the server's hangup fires up to a time-box later.
+  //
+  // The teardown cannot live in the connect effect's cleanup, for the reason
+  // that effect has none: React invokes effects twice in development, and the
+  // first cleanup would close the call the second mount is using. So it is
+  // deferred by one task and cancelled by a re-mount. A real unmount has no
+  // re-mount to cancel it.
   useEffect(() => {
-    captionsEndRef.current?.scrollIntoView({ block: "end" });
+    if (unmountTimerRef.current !== null) {
+      window.clearTimeout(unmountTimerRef.current);
+      unmountTimerRef.current = null;
+    }
+    return () => {
+      unmountTimerRef.current = window.setTimeout(() => {
+        unmountTimerRef.current = null;
+        leaveRef.current?.();
+      }, 0);
+    };
+  }, []);
+
+  // Keep the newest caption in view without moving the page: the captions are
+  // their own scrolling region, so it is that region which scrolls.
+  useEffect(() => {
+    const region = captionsScrollRef.current;
+    if (region !== null) {
+      region.scrollTop = region.scrollHeight;
+    }
   }, [captions]);
 
   if (details === undefined) {
@@ -518,9 +683,9 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
           {failure}
         </p>
         <p className="mt-3 max-w-lg text-sm leading-7 text-zinc-600 dark:text-zinc-400">
-          Viva needs your microphone. Check that this site is allowed to use
-          it, then start a new Session — this one did not count against your
-          limit.
+          {failureIsMicrophone
+            ? "Viva needs your microphone. Check that this site is allowed to use it, and that no other application is holding it, then start a new Session — this one did not count against your limit."
+            : "Start a new Session when you are ready — this one did not count against your limit."}
         </p>
         <BackLink />
       </Shell>
@@ -542,8 +707,8 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
   }
 
   return (
-    <div className="flex min-h-full flex-1 flex-col bg-white dark:bg-black">
-      <header className="border-b border-zinc-200 px-6 py-4 dark:border-zinc-800">
+    <div className="flex h-dvh flex-col overflow-hidden bg-white dark:bg-black">
+      <header className="shrink-0 border-b border-zinc-200 px-6 py-4 dark:border-zinc-800">
         <div className="mx-auto flex w-full max-w-3xl items-baseline justify-between gap-6">
           <div>
             <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
@@ -574,13 +739,16 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
       {warned && (
         <p
           role="status"
-          className="border-b border-amber-300 bg-amber-50 px-6 py-2 text-center text-sm font-medium text-amber-900 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-200"
+          className="shrink-0 border-b border-amber-300 bg-amber-50 px-6 py-2 text-center text-sm font-medium text-amber-900 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-200"
         >
           Two minutes remaining.
         </p>
       )}
 
-      <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-8">
+      <main
+        ref={captionsScrollRef}
+        className="mx-auto w-full min-h-0 max-w-3xl flex-1 overflow-y-auto px-6 py-8"
+      >
         {phase === "connecting" && (
           <p className="text-sm text-zinc-500">
             Connecting to the Examiner. Allow microphone access when your
@@ -591,7 +759,18 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
           <p className="text-sm text-zinc-500">Ending the Session…</p>
         )}
 
-        <section aria-label="Examiner captions" className="space-y-4">
+        {/*
+          PRD §7 makes the captions the accessibility backstop for accents and
+          for poor audio, so they have to reach a screen reader as they arrive:
+          a labelled region alone is announced once, on focus, and never again.
+        */}
+        <section
+          aria-label="Examiner captions"
+          role="log"
+          aria-live="polite"
+          aria-relevant="additions text"
+          className="space-y-4"
+        >
           {captions.length === 0 && phase === "live" && (
             <p className="text-sm text-zinc-500">
               The Examiner is about to speak. Answer out loud; you will not see
@@ -606,11 +785,10 @@ function LiveSession({ sessionId }: { sessionId: Id<"sessions"> }) {
               {caption.text}
             </p>
           ))}
-          <div ref={captionsEndRef} />
         </section>
       </main>
 
-      <footer className="border-t border-zinc-200 px-6 py-4 dark:border-zinc-800">
+      <footer className="shrink-0 border-t border-zinc-200 px-6 py-4 dark:border-zinc-800">
         <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-6">
           <p className="text-xs leading-5 text-zinc-500">
             Captions show the Examiner only. Your speech is transcribed but not
