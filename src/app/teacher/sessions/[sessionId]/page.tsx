@@ -17,7 +17,10 @@
 //
 //   A failed Assessment says it failed and offers the Grader again. It does not
 //   guess at why: the row carries no failure reason, and the honest place for
-//   one is the Convex logs.
+//   one is the Convex logs. "No Assessment" is a different thing and is not
+//   offered the Grader on sight: for the first half-minute after a Session it
+//   only means the seal has not run yet, and on a Session that has not ended it
+//   means the examination is still happening.
 
 import { useMutation, useQuery } from "convex/react";
 import { Authenticated, AuthLoading, Unauthenticated } from "convex/react";
@@ -26,6 +29,7 @@ import { useRouter } from "next/navigation";
 import { use, useEffect, useState } from "react";
 import { api } from "../../../../../convex/_generated/api";
 import type { Id } from "../../../../../convex/_generated/dataModel";
+import { useGraderStartWindowElapsed } from "../../../../lib/graderWindow";
 import {
   END_REASON_LABEL,
   RATING_CLASS,
@@ -168,6 +172,8 @@ function SessionDetail({ sessionId }: { sessionId: Id<"sessions"> }) {
         sessionId={sessionId}
         assessment={assessment}
         releaseMode={releaseMode}
+        sessionStatus={session.status}
+        sessionEndedAt={session.endedAt}
       />
 
       <Section title="Transcript">
@@ -222,15 +228,43 @@ function AssessmentSection({
   sessionId,
   assessment,
   releaseMode,
+  sessionStatus,
+  sessionEndedAt,
 }: {
   sessionId: Id<"sessions">;
   assessment: TeacherAssessment | null | undefined;
   releaseMode: "shadow" | "auto" | null;
+  sessionStatus: "minted" | "live" | "ended";
+  sessionEndedAt: number | null;
 }) {
+  const graderWindowElapsed = useGraderStartWindowElapsed(sessionEndedAt);
+
   if (assessment === undefined) {
     return (
       <Section title="Assessment">
         <p className="text-sm text-zinc-500">Loading…</p>
+      </Section>
+    );
+  }
+  if (assessment === null && sessionStatus !== "ended") {
+    return (
+      <Section title="Assessment">
+        <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+          {sessionStatus === "live"
+            ? "This Session is still running. An Assessment is opened once it ends."
+            : "This Session was minted but never started, so there is nothing to assess."}
+        </p>
+      </Section>
+    );
+  }
+  if (assessment === null && !graderWindowElapsed) {
+    return (
+      <Section title="Assessment">
+        <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+          This Session has just ended. The Transcript is given a moment to
+          settle before the Grader reads it, so the Assessment does not exist
+          yet. This page updates itself when it does.
+        </p>
       </Section>
     );
   }
@@ -440,7 +474,14 @@ function ReleaseControl({
   );
 }
 
-/** The recourse for an Assessment the Grader could not produce. */
+/**
+ * The recourse for an Assessment the Grader could not produce.
+ *
+ * Offered for a `failed` Assessment, and for one that is genuinely absent on a
+ * Session that ended long enough ago for the seal to have run. Not offered
+ * while one is `pending`: `assessments.retry` refuses a run that is already in
+ * flight, and a button whose only outcome is a refusal is not a recourse.
+ */
 function RetryControl({
   sessionId,
   label,

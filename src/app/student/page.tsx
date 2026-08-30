@@ -14,6 +14,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import { graderStartWindowElapsed } from "../../lib/graderWindow";
 import { stashClientSecret } from "../../lib/sessionHandoff";
 import {
   describeSession,
@@ -218,7 +219,7 @@ function StudentDashboard({ displayName }: { displayName: string }) {
                   </span>
                   <span className="w-full text-xs text-zinc-500">
                     {describeSession(session)}
-                    {feedbackLabel(feedbackStates, session._id)}
+                    {feedbackLabel(feedbackStates, session._id, session.endedAt)}
                   </span>
                 </Link>
               </li>
@@ -253,13 +254,24 @@ function Notice({
  * Where this Session's feedback has got to, appended to the row. Silent while
  * the states are still loading, and for a Session that has not ended — the row
  * already says it is in progress.
+ *
+ * Also silent for the half-minute after a Session ends. `no_assessment` is the
+ * server's answer for both "nothing was recorded" and "the Assessment has not
+ * been opened yet", and it is the second one that is true immediately after a
+ * Session: the Transcript is sealed on a delay so the Grader never reads a
+ * record still being written. Saying nothing for those seconds is better than
+ * telling a Student their Session was not assessed and being wrong.
  */
 function feedbackLabel(
   states: { sessionId: Id<"sessions">; state: FeedbackState }[] | undefined,
   sessionId: Id<"sessions">,
+  endedAt: number | null,
 ): string {
   const state = states?.find((row) => row.sessionId === sessionId)?.state;
   if (state === undefined) {
+    return "";
+  }
+  if (state === "no_assessment" && !graderStartWindowElapsed(endedAt)) {
     return "";
   }
   const label = FEEDBACK_STATE_LABEL[state];

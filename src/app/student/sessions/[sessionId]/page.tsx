@@ -29,6 +29,7 @@ import { useRouter } from "next/navigation";
 import { use, useEffect } from "react";
 import { api } from "../../../../../convex/_generated/api";
 import type { Id } from "../../../../../convex/_generated/dataModel";
+import { useGraderStartWindowElapsed } from "../../../../lib/graderWindow";
 import {
   describeSession,
   formatWhen,
@@ -104,6 +105,7 @@ function Feedback({ sessionId }: { sessionId: Id<"sessions"> }) {
         sessionId={sessionId}
         countsAgainstCaps={session.countsAgainstCaps}
         sessionStatus={session.status}
+        endedAt={session.endedAt}
       />
 
       {view.assignmentPrompt.length > 0 && (
@@ -133,13 +135,23 @@ function FeedbackSection({
   sessionId,
   countsAgainstCaps,
   sessionStatus,
+  endedAt,
 }: {
   state: FeedbackState;
   formativeSummary: string | null;
   sessionId: Id<"sessions">;
   countsAgainstCaps: boolean | null;
   sessionStatus: "minted" | "live" | "ended";
+  endedAt: number | null;
 }) {
+  // `no_assessment` is the server's honest answer to "is there an Assessment
+  // row", and for the first half-minute after a Session there is not one yet:
+  // the Transcript is sealed on a delay so the Grader never reads a record
+  // still being written. Saying "this Session was not assessed" in that window
+  // would tell a Student their examination came to nothing seconds after they
+  // finished it.
+  const graderWindowElapsed = useGraderStartWindowElapsed(endedAt);
+
   if (state === "released") {
     return (
       <section className="mt-10">
@@ -197,6 +209,17 @@ function FeedbackSection({
           the Assessment again — nothing you said has been lost.
         </Explanation>
       </section>
+    );
+  }
+
+  if (state === "no_assessment" && !graderWindowElapsed) {
+    return (
+      <Pending title="Your Assessment is being prepared">
+        Your Session has just ended. Your Transcript is given a moment to
+        settle before the Grader reads it, so nothing is assessed while it is
+        still being written. Your feedback appears here on its own — you do not
+        need to reload. Your Transcript is below in the meantime.
+      </Pending>
     );
   }
 
