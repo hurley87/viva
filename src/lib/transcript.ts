@@ -191,9 +191,18 @@ export type TranscriptRecorder = {
   record: (rows: readonly TranscriptRow[]) => void;
   /** Send whatever is pending right now. Safe to call at any time. */
   flush: () => void;
-  /** Stop the timer. Does not send. */
+  /** Stop the timer, retries included. Does not send. */
   dispose: () => void;
 };
+
+/**
+ * How many times a rejected write is tried again before the recorder gives up
+ * on it. The delay grows linearly with the attempt, so the last one is roughly
+ * `debounceMs * MAX_SEND_ATTEMPTS` after the first — long enough to outlast a
+ * transient server error, short enough that it is over well inside the window
+ * in which the server still accepts Transcript writes.
+ */
+const MAX_SEND_ATTEMPTS = 4;
 
 /**
  * Batches snapshots into at most one write per `debounceMs`, and sends nothing
@@ -204,9 +213,12 @@ export type TranscriptRecorder = {
  * instead of being starved by continuous updates. That bound is the worst case
  * a tab crash can cost.
  *
- * A failed send clears the "already sent" memo, so the next snapshot resends
- * the material rather than assuming it landed. During a live Session snapshots
- * keep coming, which is the retry.
+ * A rejected send puts its rows back and arms the timer again, up to
+ * {@link MAX_SEND_ATTEMPTS}. During a live Session the next snapshot would
+ * supersede them anyway — but the write that matters most is the LAST one, the
+ * flush issued as the Session ends, and after it no snapshot is ever coming.
+ * Relying on "more snapshots will arrive" would lose the closing turns
+ * permanently, and the Transcript is the sole Session record (ADR-0001).
  */
 export function createTranscriptRecorder(
   send: TranscriptSender,
@@ -215,6 +227,13 @@ export function createTranscriptRecorder(
   let pending: readonly TranscriptRow[] | null = null;
   let lastSent: readonly TranscriptRow[] | null = null;
   let timer: number | null = null;
+  let failedAttempts = 0;
+
+  function arm(delayMs: number): void {
+    if (timer === null) {
+      timer = window.setTimeout(flush, delayMs);
+    }
+  }
 
   function flush(): void {
     if (timer !== null) {
@@ -230,17 +249,29 @@ export function createTranscriptRecorder(
       return;
     }
     lastSent = rows;
-    void send(rows).catch(() => {
-      lastSent = null;
-    });
+    void send(rows).then(
+      () => {
+        failedAttempts = 0;
+      },
+      () => {
+        lastSent = null;
+        // Newer rows supersede these — they are re-derived from the whole
+        // history, so the newer snapshot already contains everything here.
+        if (pending === null) {
+          pending = rows;
+        }
+        failedAttempts += 1;
+        if (failedAttempts < MAX_SEND_ATTEMPTS) {
+          arm(debounceMs * failedAttempts);
+        }
+      },
+    );
   }
 
   return {
     record(rows) {
       pending = rows;
-      if (timer === null) {
-        timer = window.setTimeout(flush, debounceMs);
-      }
+      arm(debounceMs);
     },
     flush,
     dispose() {

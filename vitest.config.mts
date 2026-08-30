@@ -1,13 +1,31 @@
 import { defineConfig } from "vitest/config";
 
-// Convex function tests run under convex-test in the edge runtime, which is
-// what the Convex isolate provides. Add a second `projects` entry with a jsdom
-// environment when UI tests appear (jsdom is not installed yet).
+// Two suites, because they need two runtimes.
+//
+//   convex  Convex function tests run under convex-test in the edge runtime,
+//           which is what the Convex isolate provides.
+//   src     The browser-side modules that are pure enough to test without a
+//           browser: the Transcript mapping and recorder, and the shared
+//           formatters. Components are not tested here — jsdom is not
+//           installed — so anything needing a DOM stays out.
 export default defineConfig({
   test: {
-    name: "convex",
-    include: ["convex/**/*.test.ts"],
-    environment: "edge-runtime",
     passWithNoTests: true,
+    projects: [
+      {
+        test: {
+          name: "convex",
+          include: ["convex/**/*.test.ts"],
+          environment: "edge-runtime",
+        },
+      },
+      {
+        test: {
+          name: "src",
+          include: ["src/**/*.test.ts"],
+          environment: "node",
+        },
+      },
+    ],
   },
 });
