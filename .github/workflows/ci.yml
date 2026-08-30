@@ -1,0 +1,69 @@
+# The invariant suite as CI (PRD §4, ticket #8).
+#
+# INV-2, INV-3 and INV-4 are enforced by tests rather than by prose, so those
+# tests have to run on every push or the enforcement is back to being prose.
+#
+# No secrets. The suite runs entirely against convex-test's in-memory backend
+# and never reaches OpenAI, Privy, or a Convex deployment — a cap-refused mint
+# returns before it asks for a client secret, which is exactly why this can be
+# a required check on every branch. The two `NEXT_PUBLIC_*` values below are
+# build-time placeholders, not credentials: they are public by construction
+# (they ship in the browser bundle) and nothing in this workflow connects to
+# either service.
+
+name: CI
+
+on:
+  push:
+  # A pull request from a fork pushes to the fork, not to this repository, so
+  # `push` alone never runs on one — and a check that cannot run cannot be a
+  # required check for an outside contribution, which is exactly the gap this
+  # workflow exists to close.
+  pull_request:
+  workflow_dispatch:
+
+# One run per ref. A push that supersedes an in-flight run cancels it, and the
+# same key de-duplicates the push/pull_request pair for a same-repo branch.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Invariants, types, lint, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # Placeholders so the production build can render the app shell. The
+      # Privy provider validates the shape of its app id (25 characters), and
+      # the Convex client validates its URL; neither is contacted.
+      NEXT_PUBLIC_CONVEX_URL: https://ci-placeholder.convex.cloud
+      NEXT_PUBLIC_PRIVY_APP_ID: ciplaceholderappid0000000
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # First, and on its own step, so a red run says which guarantee broke
+      # before anything else has had a chance to fail.
+      - name: Invariant suite (INV-2 / INV-3 / INV-4)
+        run: npm test
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
