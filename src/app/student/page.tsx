@@ -125,8 +125,9 @@ function StudentDashboard({ displayName }: { displayName: string }) {
         </h1>
         <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
           A Session is a live spoken examination. The Examiner asks one
-          question at a time and presses on what you say. It runs for fifteen
-          minutes, with a warning at thirteen.
+          question at a time and presses on what you say. It runs to a fixed
+          time-box, counting down on screen from the moment it begins, and you
+          are told when the time is nearly up.
         </p>
       </header>
 
